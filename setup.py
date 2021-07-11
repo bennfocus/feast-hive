@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
-from setuptools import setup, find_packages
+from setuptools import setup
 
-with open('README.rst') as f:
+with open('README.md') as f:
     readme = f.read()
 
 with open('LICENSE') as f:
@@ -21,9 +21,7 @@ setup(
     license=license,
     packages=['feast_hive'],
     install_requires=[
-        "PyHive==0.6.4",
+        "feast>=0.11.0",
+        "PyHive[hive]==0.6.4",
     ],
-    extras_require={
-        "dev": ["feast>=0.11.0"],
-    }
 )

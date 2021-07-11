@@ -1,21 +1,158 @@
-from typing import Optional, Dict, Callable, Iterable, Tuple
+from typing import Optional, Dict, Callable, Iterable, Tuple, Any
 
-from feast import RepoConfig, ValueType, type_map
+from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
 from feast.errors import DataSourceNotFoundException
+
+
+class HiveOptions:
+    """
+    DataSource Hive options used to source features from Hive
+    """
+
+    def __init__(
+            self,
+            host: Optional[str],
+            port: Optional[str],
+            table_ref: Optional[str],
+            query: Optional[str],
+            extra_conn_params: Optional[Dict[str, Any]]
+    ):
+        self._host = host
+        self._port = port
+        self._table_ref = table_ref
+        self._query = query
+        self._extra_conn_params = extra_conn_params
+
+    @property
+    def host(self):
+        """
+        Returns the hive connection host of this data source
+        """
+        return self._host
+
+    @host.setter
+    def host(self, host):
+        """
+        Sets the hive connection host of this data source
+        """
+        self._host = host
+
+    @property
+    def port(self):
+        """
+        Returns the hive connection port of this data source
+        """
+        return self._port
+
+    @port.setter
+    def port(self, port):
+        """
+        Sets the hive connection port of this data source
+        """
+        self._port = port
+
+    @property
+    def table_ref(self):
+        """
+        Returns the table ref of this data source
+        """
+        return self._table_ref
+
+    @table_ref.setter
+    def table_ref(self, table_ref):
+        """
+        Sets the table ref of this data source
+        """
+        self._table_ref = table_ref
+
+    @property
+    def query(self):
+        """
+        Returns the query of this data source
+        """
+        return self._query
+
+    @query.setter
+    def query(self, query):
+        """
+        Sets the query of this data source
+        """
+        self._query = query
+
+    @property
+    def extra_conn_params(self):
+        """
+        Returns the extra connection parameters of this data source
+        """
+        return self._extra_conn_params
+
+    @extra_conn_params.setter
+    def extra_conn_params(self, extra_conn_params):
+        """
+        Sets the extra connection parameters of this data source
+        """
+        self._extra_conn_params = extra_conn_params
+
+    @classmethod
+    def from_proto(cls, hive_options_proto: Any):
+        """
+        Creates a HiveOptions from a protobuf representation of a hive option
+
+        Args:
+            hive_options_proto: A protobuf representation of a DataSource
+
+        Returns:
+            Returns a HiveOptions object based on the hive_options protobuf
+        """
+
+        pass
+
+    def to_proto(self) -> None:
+        """
+        Converts an HiveOptionsProto object to its protobuf representation.
+
+        Returns:
+            HiveOptionsProto protobuf
+        """
+
+        pass
 
 
 class HiveSource(DataSource):
     def __init__(
             self,
-            event_timestamp_column: Optional[str] = "",
+            host: Optional[str] = None,
+            port: Optional[str] = None,
             table_ref: Optional[str] = None,
+            query: Optional[str] = None,
+            extra_conn_params: Optional[Dict[str, Any]] = None,
+            event_timestamp_column: Optional[str] = "",
             created_timestamp_column: Optional[str] = "",
             field_mapping: Optional[Dict[str, str]] = None,
             date_partition_column: Optional[str] = "",
-            query: Optional[str] = None,
     ):
-        self._bigquery_options = BigQueryOptions(table_ref=table_ref, query=query)
+        """Connect to HiveServer2
+
+        :param host: What host HiveServer2 runs on.
+        :param port: What port HiveServer2 runs on. Defaults to 10000.
+        :param table_ref: The table ref of the data source.
+        :param query: In case the data in data source ont in one table/view.
+        :param extra_conn_params: Extra PyHive connection params besides the host and port.
+            Check here for the complete params list: https://github.com/dropbox/PyHive/blob/master/pyhive/hive.py#L110
+        :param event_timestamp_column:
+        :param created_timestamp_column:
+        :param field_mapping:
+        :param date_partition_column:
+        """
+
+        self._hive_options = HiveOptions(
+            host=host,
+            port=host,
+            table_ref=table_ref,
+            query=query,
+            extra_conn_params=extra_conn_params
+        )
 
         super().__init__(
             event_timestamp_column,
@@ -31,58 +168,74 @@ class HiveSource(DataSource):
             )
 
         return (
-                self.bigquery_options.table_ref == other.bigquery_options.table_ref
-                and self.bigquery_options.query == other.bigquery_options.query
+                self.hive_options.host == other.hive_options.host
+                and self.hive_options.port == other.hive_options.host
+                and self.hive_options.table_ref == other.hive_options.table_ref
+                and self.hive_options.query == other.hive_options.query
+                and self.hive_options.extra_conn_params == other.hive_options.extra_conn_params
                 and self.event_timestamp_column == other.event_timestamp_column
                 and self.created_timestamp_column == other.created_timestamp_column
                 and self.field_mapping == other.field_mapping
+                and self.date_partition_column == other.date_partition_column
         )
 
     @property
-    def table_ref(self):
-        return self._bigquery_options.table_ref
-
-    @property
-    def query(self):
-        return self._bigquery_options.query
-
-    @property
-    def bigquery_options(self):
+    def hive_options(self):
         """
-        Returns the bigquery options of this data source
+        Returns the hive options of this data source
         """
-        return self._bigquery_options
+        return self._hive_options
 
-    @bigquery_options.setter
-    def bigquery_options(self, bigquery_options):
+    @hive_options.setter
+    def hive_options(self, hive_options):
         """
         Sets the bigquery options of this data source
         """
-        self._bigquery_options = bigquery_options
+        self._hive_options = hive_options
 
-    def to_proto(self) -> DataSourceProto:
-        data_source_proto = DataSourceProto(
-            type=DataSourceProto.BATCH_BIGQUERY,
-            field_mapping=self.field_mapping,
-            bigquery_options=self.bigquery_options.to_proto(),
-        )
+    @property
+    def host(self):
+        return self._hive_options.host
 
-        data_source_proto.event_timestamp_column = self.event_timestamp_column
-        data_source_proto.created_timestamp_column = self.created_timestamp_column
-        data_source_proto.date_partition_column = self.date_partition_column
+    @property
+    def port(self):
+        return self._hive_options.port
 
-        return data_source_proto
+    @property
+    def table_ref(self):
+        return self._hive_options.table_ref
+
+    @property
+    def query(self):
+        return self._hive_options.query
+
+    @property
+    def extra_conn_params(self):
+        return self._hive_options.extra_conn_params
+
+    @property
+    def pyhive_conn_params(self):
+        return {
+            'host': self.host,
+            'port': self.port,
+            **self.extra_conn_params
+        }
+
+    def to_proto(self) -> None:
+        pass
 
     def validate(self, config: RepoConfig):
         if not self.query:
-            from google.api_core.exceptions import NotFound
-            from google.cloud import bigquery
-
-            client = bigquery.Client()
-            try:
-                client.get_table(self.table_ref)
-            except NotFound:
-                raise DataSourceNotFoundException(self.table_ref)
+            from pyhive import hive
+            with hive.connect(**self.pyhive_conn_params) as conn:
+                cursor = conn.cursor()
+                table_ref_splits = self.table_ref.rsplit('.', 1)
+                if len(table_ref_splits) == 2:
+                    cursor.execute(f'use {table_ref_splits[0]}')
+                    table_ref_splits.pop(0)
+                cursor.execute(f'show tables like "{table_ref_splits[0]}"')
+                if not cursor.fetchone():
+                    raise DataSourceNotFoundException(self.table_ref)
 
     def get_table_query_string(self) -> str:
         """Returns a string that can directly be used to reference this table in SQL"""
@@ -93,26 +246,61 @@ class HiveSource(DataSource):
 
     @staticmethod
     def source_datatype_to_feast_value_type() -> Callable[[str], ValueType]:
-        return type_map.bq_to_feast_value_type
+        return hive_to_feast_value_type
 
     def get_table_column_names_and_types(
             self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
-        from google.cloud import bigquery
+        from pyhive import hive
+        # TODO: more tests for different data types
+        with hive.connect(**self.pyhive_conn_params) as conn:
+            cursor = conn.cursor()
+            if self.table_ref is not None:
+                cursor.execute(f'desc {self.table_ref}')
+                name_type_pairs = []
+                for field in cursor.fetchall():
+                    if field[0] == '':
+                        break
+                    name_type_pairs.append((field[0], field[1]))
+            else:
+                cursor.execute(f'SELECT * FROM ({self.query}) t LIMIT 1')
+                name_type_pairs = [(info[0], str(info[1])[:-5]) for info in cursor.description]
 
-        client = bigquery.Client()
-        if self.table_ref is not None:
-            table_schema = client.get_table(self.table_ref).schema
-            if not isinstance(table_schema[0], bigquery.schema.SchemaField):
-                raise TypeError("Could not parse BigQuery table schema.")
+            return name_type_pairs
 
-            name_type_pairs = [(field.name, field.field_type) for field in table_schema]
-        else:
-            bq_columns_query = f"SELECT * FROM ({self.query}) LIMIT 1"
-            queryRes = client.query(bq_columns_query).result()
-            name_type_pairs = [
-                (schema_field.name, schema_field.field_type)
-                for schema_field in queryRes.schema
-            ]
 
-        return name_type_pairs
+def hive_to_feast_value_type(hive_type_as_str: str):
+    type_map: Dict[str, ValueType] = {
+        # Numeric Types
+        "TINYINT": ValueType.INT32,
+        "SMALLINT": ValueType.INT32,
+        "INT": ValueType.INT64,
+        "INTEGER": ValueType.INT64,
+        "BIGINT": ValueType.INT64,
+        "FLOAT": ValueType.DOUBLE,
+        "DOUBLE": ValueType.DOUBLE,
+        "DECIMAL": ValueType.DOUBLE,
+        "NUMERIC": ValueType.DOUBLE,
+        # Date/Time Types
+        "TIMESTAMP": ValueType.STRING,  # Update to ValueType.UNIX_TIMESTAMP once #1520 lands.
+        "DATE": ValueType.STRING,
+        "INTERVAL": ValueType.STRING,
+        # String Types
+        "STRING": ValueType.STRING,
+        "VARCHAR": ValueType.STRING,
+        "CHAR": ValueType.STRING,
+        # Misc Types
+        "BOOLEAN": ValueType.BOOL,
+        "BINARY": ValueType.BYTES,
+        # Complex Types
+        "ARRAY<INT>": ValueType.INT64_LIST,
+        "ARRAY<FLOAT>": ValueType.DOUBLE_LIST,
+        "ARRAY<STRING>": ValueType.STRING_LIST,
+        "ARRAY<BINARY>": ValueType.BYTES_LIST,
+        "ARRAY<BOOLEAN>": ValueType.BOOL_LIST,
+        # missed MAP, STRUCT, UNIONTYPE and USER_DEFINED types
+        # TODO: need consider how to handler these complex types
+        # such as: struct<id:string,type:ARRAY<string>>
+    }
+
+    return type_map[hive_type_as_str]

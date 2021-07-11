@@ -2,14 +2,17 @@ from datetime import datetime
 from typing import List, Optional, Union, Literal
 
 import pandas
+import pyarrow
 from feast import FeatureView
 from feast.data_source import DataSource
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+from .data_source import HiveSource
 
 try:
     from pyhive import hive
+    from TCLIService.ttypes import TOperationState
 
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -36,7 +39,36 @@ class HiveOfflineStore(OfflineStore):
             start_date: datetime,
             end_date: datetime,
     ) -> RetrievalJob:
-        pass
+        assert isinstance(data_source, HiveSource)
+        from_expression = data_source.get_table_query_string()
+
+        partition_by_join_key_string = ", ".join(join_key_columns)
+        if partition_by_join_key_string != "":
+            partition_by_join_key_string = (
+                    "PARTITION BY " + partition_by_join_key_string
+            )
+        timestamps = [event_timestamp_column]
+        if created_timestamp_column:
+            timestamps.append(created_timestamp_column)
+        timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
+        field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
+
+        with hive.connect(**data_source.pyhive_conn_params) as conn:
+            query = f"""
+            SELECT {field_string}
+            FROM (
+                SELECT {field_string},
+                ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS _feast_row
+                FROM {from_expression} t1
+                WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
+            ) t2
+            WHERE _feast_row = 1
+            """
+
+            cursor = conn.cursor()
+            # execute the job now, then check status in to_df or to_arrow
+            cursor.execute(query, async_=True)
+            return HiveRetrievalJob(cursor)
 
     @staticmethod
     def get_historical_features(
@@ -48,3 +80,24 @@ class HiveOfflineStore(OfflineStore):
             project: str,
     ) -> RetrievalJob:
         pass
+
+
+class HiveRetrievalJob(RetrievalJob):
+    def __init__(self, cursor: hive.Cursor):
+        self.cursor = cursor
+
+    def to_df(self):
+        self._waiting_results()
+        df = pandas.DataFrame(
+            self.cursor.fetchall(),
+            columns=[field[0] for field in self.cursor.description]
+        )
+        return df
+
+    def to_arrow(self) -> pyarrow.Table:
+        return pyarrow.Table.from_pandas(self.to_df())
+
+    def _waiting_results(self):
+        status = self.cursor.poll().operationState
+        while status in (TOperationState.INITIALIZED_STATE, TOperationState.RUNNING_STATE):
+            status = self.cursor.poll().operationState
