@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Callable, Iterable, Tuple, Any
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
@@ -11,12 +11,12 @@ class HiveOptions:
     """
 
     def __init__(
-            self,
-            host: Optional[str],
-            port: Optional[str],
-            table_ref: Optional[str],
-            query: Optional[str],
-            extra_conn_params: Optional[Dict[str, Any]]
+        self,
+        host: Optional[str],
+        port: Optional[str],
+        table_ref: Optional[str],
+        query: Optional[str],
+        extra_conn_params: Optional[Dict[str, Any]],
     ):
         self._host = host
         self._port = port
@@ -121,16 +121,16 @@ class HiveOptions:
 
 class HiveSource(DataSource):
     def __init__(
-            self,
-            host: Optional[str] = None,
-            port: Optional[str] = None,
-            table_ref: Optional[str] = None,
-            query: Optional[str] = None,
-            extra_conn_params: Optional[Dict[str, Any]] = None,
-            event_timestamp_column: Optional[str] = "",
-            created_timestamp_column: Optional[str] = "",
-            field_mapping: Optional[Dict[str, str]] = None,
-            date_partition_column: Optional[str] = "",
+        self,
+        host: Optional[str] = None,
+        port: Optional[str] = None,
+        table_ref: Optional[str] = None,
+        query: Optional[str] = None,
+        extra_conn_params: Optional[Dict[str, Any]] = None,
+        event_timestamp_column: Optional[str] = "",
+        created_timestamp_column: Optional[str] = "",
+        field_mapping: Optional[Dict[str, str]] = None,
+        date_partition_column: Optional[str] = "",
     ):
         """Connect to HiveServer2
 
@@ -151,7 +151,7 @@ class HiveSource(DataSource):
             port=host,
             table_ref=table_ref,
             query=query,
-            extra_conn_params=extra_conn_params
+            extra_conn_params=extra_conn_params,
         )
 
         super().__init__(
@@ -163,20 +163,19 @@ class HiveSource(DataSource):
 
     def __eq__(self, other):
         if not isinstance(other, HiveSource):
-            raise TypeError(
-                "Comparisons should only involve HiveSource class objects."
-            )
+            raise TypeError("Comparisons should only involve HiveSource class objects.")
 
         return (
-                self.hive_options.host == other.hive_options.host
-                and self.hive_options.port == other.hive_options.host
-                and self.hive_options.table_ref == other.hive_options.table_ref
-                and self.hive_options.query == other.hive_options.query
-                and self.hive_options.extra_conn_params == other.hive_options.extra_conn_params
-                and self.event_timestamp_column == other.event_timestamp_column
-                and self.created_timestamp_column == other.created_timestamp_column
-                and self.field_mapping == other.field_mapping
-                and self.date_partition_column == other.date_partition_column
+            self.hive_options.host == other.hive_options.host
+            and self.hive_options.port == other.hive_options.host
+            and self.hive_options.table_ref == other.hive_options.table_ref
+            and self.hive_options.query == other.hive_options.query
+            and self.hive_options.extra_conn_params
+            == other.hive_options.extra_conn_params
+            and self.event_timestamp_column == other.event_timestamp_column
+            and self.created_timestamp_column == other.created_timestamp_column
+            and self.field_mapping == other.field_mapping
+            and self.date_partition_column == other.date_partition_column
         )
 
     @property
@@ -215,11 +214,7 @@ class HiveSource(DataSource):
 
     @property
     def pyhive_conn_params(self):
-        return {
-            'host': self.host,
-            'port': self.port,
-            **self.extra_conn_params
-        }
+        return {"host": self.host, "port": self.port, **self.extra_conn_params}
 
     def to_proto(self) -> None:
         pass
@@ -227,11 +222,12 @@ class HiveSource(DataSource):
     def validate(self, config: RepoConfig):
         if not self.query:
             from pyhive import hive
+
             with hive.connect(**self.pyhive_conn_params) as conn:
                 cursor = conn.cursor()
-                table_ref_splits = self.table_ref.rsplit('.', 1)
+                table_ref_splits = self.table_ref.rsplit(".", 1)
                 if len(table_ref_splits) == 2:
-                    cursor.execute(f'use {table_ref_splits[0]}')
+                    cursor.execute(f"use {table_ref_splits[0]}")
                     table_ref_splits.pop(0)
                 cursor.execute(f'show tables like "{table_ref_splits[0]}"')
                 if not cursor.fetchone():
@@ -249,22 +245,25 @@ class HiveSource(DataSource):
         return hive_to_feast_value_type
 
     def get_table_column_names_and_types(
-            self, config: RepoConfig
+        self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
         from pyhive import hive
+
         # TODO: more tests for different data types
         with hive.connect(**self.pyhive_conn_params) as conn:
             cursor = conn.cursor()
             if self.table_ref is not None:
-                cursor.execute(f'desc {self.table_ref}')
+                cursor.execute(f"desc {self.table_ref}")
                 name_type_pairs = []
                 for field in cursor.fetchall():
-                    if field[0] == '':
+                    if field[0] == "":
                         break
                     name_type_pairs.append((field[0], field[1]))
             else:
-                cursor.execute(f'SELECT * FROM ({self.query}) t LIMIT 1')
-                name_type_pairs = [(info[0], str(info[1])[:-5]) for info in cursor.description]
+                cursor.execute(f"SELECT * FROM ({self.query}) t LIMIT 1")
+                name_type_pairs = [
+                    (info[0], str(info[1])[:-5]) for info in cursor.description
+                ]
 
             return name_type_pairs
 

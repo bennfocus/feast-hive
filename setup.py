@@ -24,4 +24,15 @@ setup(
         "feast>=0.11.0",
         "impyla==0.17.0",
     ],
+    extras_require={
+        "dev": [
+            "flake8",
+            "black==19.10b0",
+            "isort>=5",
+            "mypy==0.790",
+        ],
+        "test": [
+            "pytest==6.0.0",
+        ]
+    },
 )
