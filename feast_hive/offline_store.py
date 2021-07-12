@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, Set
 
 import pandas
 import pyarrow
@@ -8,6 +8,7 @@ from feast.data_source import DataSource
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+
 from .data_source import HiveSource
 
 try:
@@ -79,7 +80,9 @@ class HiveOfflineStore(OfflineStore):
             registry: Registry,
             project: str,
     ) -> RetrievalJob:
-        pass
+        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
+
+        expected_join_keys = _get_join_keys(project, feature_views, registry)
 
 
 class HiveRetrievalJob(RetrievalJob):
@@ -101,3 +104,15 @@ class HiveRetrievalJob(RetrievalJob):
         status = self.cursor.poll().operationState
         while status in (TOperationState.INITIALIZED_STATE, TOperationState.RUNNING_STATE):
             status = self.cursor.poll().operationState
+
+
+def _get_join_keys(
+        project: str, feature_views: List[FeatureView], registry: Registry
+) -> Set[str]:
+    join_keys = set()
+    for feature_view in feature_views:
+        entities = feature_view.entities
+        for entity_name in entities:
+            entity = registry.get_entity(entity_name, project)
+            join_keys.add(entity.join_key)
+    return join_keys
