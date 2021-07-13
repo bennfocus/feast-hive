@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import List, Literal, Optional, Set, Union
 
@@ -13,8 +14,8 @@ from feast.repo_config import FeastConfigBaseModel, RepoConfig
 from .data_source import HiveSource
 
 try:
-    from pyhive import hive
-    from TCLIService.ttypes import TOperationState
+    from impala.dbapi import connect
+    from impala.hiveserver2 import HiveServer2Cursor
 
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -55,7 +56,7 @@ class HiveOfflineStore(OfflineStore):
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
         field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
 
-        with hive.connect(**data_source.pyhive_conn_params) as conn:
+        with connect(**data_source.all_conn_params) as conn:
             query = f"""
             SELECT {field_string}
             FROM (
@@ -69,7 +70,7 @@ class HiveOfflineStore(OfflineStore):
 
             cursor = conn.cursor()
             # execute the job now, then check status in to_df or to_arrow
-            cursor.execute(query, async_=True)
+            cursor.execute_async(query)
             return HiveRetrievalJob(cursor)
 
     @staticmethod
@@ -87,7 +88,7 @@ class HiveOfflineStore(OfflineStore):
 
 
 class HiveRetrievalJob(RetrievalJob):
-    def __init__(self, cursor: hive.Cursor):
+    def __init__(self, cursor: HiveServer2Cursor):
         self.cursor = cursor
 
     def to_df(self):
@@ -102,12 +103,8 @@ class HiveRetrievalJob(RetrievalJob):
         return pyarrow.Table.from_pandas(self.to_df())
 
     def _waiting_results(self):
-        status = self.cursor.poll().operationState
-        while status in (
-            TOperationState.INITIALIZED_STATE,
-            TOperationState.RUNNING_STATE,
-        ):
-            status = self.cursor.poll().operationState
+        while self.cursor.is_executing():
+            time.sleep(0.1)
 
 
 def _get_join_keys(

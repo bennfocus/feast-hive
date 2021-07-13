@@ -13,7 +13,7 @@ class HiveOptions:
     def __init__(
         self,
         host: Optional[str],
-        port: Optional[str],
+        port: Optional[int],
         table_ref: Optional[str],
         query: Optional[str],
         extra_conn_params: Optional[Dict[str, Any]],
@@ -123,7 +123,7 @@ class HiveSource(DataSource):
     def __init__(
         self,
         host: Optional[str] = None,
-        port: Optional[str] = None,
+        port: Optional[int] = 10000,
         table_ref: Optional[str] = None,
         query: Optional[str] = None,
         extra_conn_params: Optional[Dict[str, Any]] = None,
@@ -138,20 +138,27 @@ class HiveSource(DataSource):
         :param port: What port HiveServer2 runs on. Defaults to 10000.
         :param table_ref: The table ref of the data source.
         :param query: In case the data in data source ont in one table/view.
-        :param extra_conn_params: Extra PyHive connection params besides the host and port.
-            Check here for the complete params list: https://github.com/dropbox/PyHive/blob/master/pyhive/hive.py#L110
+        :param extra_conn_params: Extra connection params besides the host and port.
+            Check here for the complete params list: https://github.com/cloudera/impyla/blob/255b07ed973d47a3395214ed92d35ec0615ebf62/impala/dbapi.py#L40
         :param event_timestamp_column:
         :param created_timestamp_column:
         :param field_mapping:
         :param date_partition_column:
         """
 
+        _default_extra_conn_params = {"auth_mechanism": "PLAIN"}
+        _extra_conn_params = (
+            {**_default_extra_conn_params, **extra_conn_params}
+            if extra_conn_params is not None
+            else _default_extra_conn_params
+        )
+
         self._hive_options = HiveOptions(
             host=host,
-            port=host,
+            port=port,
             table_ref=table_ref,
             query=query,
-            extra_conn_params=extra_conn_params,
+            extra_conn_params=_extra_conn_params,
         )
 
         super().__init__(
@@ -213,7 +220,7 @@ class HiveSource(DataSource):
         return self._hive_options.extra_conn_params
 
     @property
-    def pyhive_conn_params(self):
+    def all_conn_params(self):
         return {"host": self.host, "port": self.port, **self.extra_conn_params}
 
     def to_proto(self) -> None:
@@ -221,9 +228,9 @@ class HiveSource(DataSource):
 
     def validate(self, config: RepoConfig):
         if not self.query:
-            from pyhive import hive
+            from impala.dbapi import connect
 
-            with hive.connect(**self.pyhive_conn_params) as conn:
+            with connect(**self.all_conn_params) as conn:
                 cursor = conn.cursor()
                 table_ref_splits = self.table_ref.rsplit(".", 1)
                 if len(table_ref_splits) == 2:
@@ -247,10 +254,9 @@ class HiveSource(DataSource):
     def get_table_column_names_and_types(
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
-        from pyhive import hive
+        from impala.dbapi import connect
 
-        # TODO: more tests for different data types
-        with hive.connect(**self.pyhive_conn_params) as conn:
+        with connect(**self.all_conn_params) as conn:
             cursor = conn.cursor()
             if self.table_ref is not None:
                 cursor.execute(f"desc {self.table_ref}")
@@ -258,11 +264,13 @@ class HiveSource(DataSource):
                 for field in cursor.fetchall():
                     if field[0] == "":
                         break
-                    name_type_pairs.append((field[0], field[1]))
+                    name_type_pairs.append(
+                        (field[0], str(field[1]).upper().split("<", 1)[0])
+                    )
             else:
                 cursor.execute(f"SELECT * FROM ({self.query}) t LIMIT 1")
                 name_type_pairs = [
-                    (info[0], str(info[1])[:-5]) for info in cursor.description
+                    (info[0], str(info[1]).upper()) for info in cursor.description
                 ]
 
             return name_type_pairs
@@ -273,15 +281,15 @@ def hive_to_feast_value_type(hive_type_as_str: str):
         # Numeric Types
         "TINYINT": ValueType.INT32,
         "SMALLINT": ValueType.INT32,
-        "INT": ValueType.INT64,
-        "INTEGER": ValueType.INT64,
+        "INT": ValueType.INT32,
+        "INTEGER": ValueType.INT32,
         "BIGINT": ValueType.INT64,
         "FLOAT": ValueType.DOUBLE,
         "DOUBLE": ValueType.DOUBLE,
-        "DECIMAL": ValueType.DOUBLE,
-        "NUMERIC": ValueType.DOUBLE,
+        "DECIMAL": ValueType.STRING,
+        "NUMERIC": ValueType.STRING,
         # Date/Time Types
-        "TIMESTAMP": ValueType.STRING,  # Update to ValueType.UNIX_TIMESTAMP once #1520 lands.
+        "TIMESTAMP": ValueType.STRING,
         "DATE": ValueType.STRING,
         "INTERVAL": ValueType.STRING,
         # String Types
@@ -292,14 +300,11 @@ def hive_to_feast_value_type(hive_type_as_str: str):
         "BOOLEAN": ValueType.BOOL,
         "BINARY": ValueType.BYTES,
         # Complex Types
-        "ARRAY<INT>": ValueType.INT64_LIST,
-        "ARRAY<FLOAT>": ValueType.DOUBLE_LIST,
-        "ARRAY<STRING>": ValueType.STRING_LIST,
-        "ARRAY<BINARY>": ValueType.BYTES_LIST,
-        "ARRAY<BOOLEAN>": ValueType.BOOL_LIST,
-        # missed MAP, STRUCT, UNIONTYPE and USER_DEFINED types
-        # TODO: need consider how to handler these complex types
-        # such as: struct<id:string,type:ARRAY<string>>
+        "MAP": ValueType.STRING,
+        "ARRAY": ValueType.STRING,
+        "STRUCT": ValueType.STRING,
+        "UNIONTYPE": ValueType.STRING,
+        "NULL": ValueType.STRING,
     }
 
     return type_map[hive_type_as_str]
