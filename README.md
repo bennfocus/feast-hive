@@ -5,13 +5,13 @@ For more details, can check [this Feast issue](https://github.com/feast-dev/feas
 
 ## Quickstart
 
-### Install feast
+#### Install feast
 
 ```shell
 pip install feast
 ```
 
-### Install feast-hive
+#### Install feast-hive
 
 Install the latest dev version by pip:
 
@@ -27,14 +27,14 @@ cd feast-hive
 python setup.py install
 ```
 
-### Create a feature repository
+#### Create a feature repository
 
 ```shell
 feast init feature_repo
 cd feature_repo
 ```
 
-### Edit `feature_store.yaml`
+#### Edit `feature_store.yaml`
 
 set `offline_store` type to be `feast_hive.HiveOfflineStore`
 
@@ -48,7 +48,7 @@ online_store:
     ...
 ```
 
-### Add `hive_example.py`
+#### Add `hive_example.py`
 
 ```python
 # This is an example feature definition file
@@ -87,19 +87,20 @@ driver_hourly_stats_view = FeatureView(
 )
 ```
 
-### Apply the feature definitions
+#### Apply the feature definitions
 
 ```shell
 feast apply
 ```
 
-### Generating training data and so on
+#### Generating training data and so on
 
 The rest are as same as [Feast Quickstart](https://docs.feast.dev/quickstart#generating-training-data)
 
+
 ## Developing and Testing
 
-### Developing
+#### Developing
 
 ```shell
 git clone https://github.com/baineng/feast-hive.git
@@ -112,7 +113,7 @@ make format
 makr lint
 ```
 
-### Testing
+#### Testing
 
 ```shell
 pip install .[test]
