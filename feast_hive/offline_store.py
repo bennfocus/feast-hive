@@ -26,9 +26,6 @@ except ImportError as e:
 class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store config for Hive """
 
-    type: Literal["hive"] = "hive"
-    """ Offline store type selector"""
-
 
 class HiveOfflineStore(OfflineStore):
     @staticmethod
