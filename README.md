@@ -1,7 +1,9 @@
 # Feast Hive Support
 
 Hive is not included in current [Feast](https://github.com/feast-dev/feast) roadmap, this project intends to add Hive support for Offline Store.  
-For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686). 
+For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
+
+**Important: This project is still developing and not ready for use yet, please let me know if any of you need it, I will probably put more time on it.**
 
 ## Quickstart
 
