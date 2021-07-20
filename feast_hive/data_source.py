@@ -12,43 +12,9 @@ class HiveOptions:
 
     def __init__(
         self,
-        host: str,
         table_ref: str,
-        port: Optional[int],
-        extra_conn_params: Optional[Dict[str, Any]],
     ):
-        self._host = host
-        self._port = port
         self._table_ref = table_ref
-        self._extra_conn_params = extra_conn_params
-
-    @property
-    def host(self):
-        """
-        Returns the hive connection host of this data source
-        """
-        return self._host
-
-    @host.setter
-    def host(self, host):
-        """
-        Sets the hive connection host of this data source
-        """
-        self._host = host
-
-    @property
-    def port(self):
-        """
-        Returns the hive connection port of this data source
-        """
-        return self._port
-
-    @port.setter
-    def port(self, port):
-        """
-        Sets the hive connection port of this data source
-        """
-        self._port = port
 
     @property
     def table_ref(self):
@@ -63,20 +29,6 @@ class HiveOptions:
         Sets the table ref of this data source
         """
         self._table_ref = table_ref
-
-    @property
-    def extra_conn_params(self):
-        """
-        Returns the extra connection parameters of this data source
-        """
-        return self._extra_conn_params
-
-    @extra_conn_params.setter
-    def extra_conn_params(self, extra_conn_params):
-        """
-        Sets the extra connection parameters of this data source
-        """
-        self._extra_conn_params = extra_conn_params
 
     @classmethod
     def from_proto(cls, hive_options_proto: Any):
@@ -106,10 +58,7 @@ class HiveOptions:
 class HiveSource(DataSource):
     def __init__(
         self,
-        host: str,
         table_ref: str,
-        port: Optional[int] = 10000,
-        extra_conn_params: Optional[Dict[str, Any]] = None,
         event_timestamp_column: Optional[str] = "",
         created_timestamp_column: Optional[str] = "",
         field_mapping: Optional[Dict[str, str]] = None,
@@ -117,35 +66,18 @@ class HiveSource(DataSource):
     ):
         """Connect to HiveServer2
 
-        :param host: What host HiveServer2 runs on.
-        :param port: What port HiveServer2 runs on. Defaults to 10000.
-        :param table_ref: The table ref of the data source.
-        :param extra_conn_params: Extra connection params besides the host and port.
-            Check here for the complete params list: https://github.com/cloudera/impyla/blob/255b07ed973d47a3395214ed92d35ec0615ebf62/impala/dbapi.py#L40
+        :param table_ref: The table ref (table name or view name) in Hive.
         :param event_timestamp_column:
         :param created_timestamp_column:
         :param field_mapping:
         :param date_partition_column:
         """
 
-        assert host is not None and host != "", '"host" is required for HiveSource'
         assert (
             table_ref is not None and table_ref != ""
         ), '"table_ref" is required for HiveSource'
 
-        _default_extra_conn_params = {"auth_mechanism": "PLAIN"}
-        _extra_conn_params = (
-            {**_default_extra_conn_params, **extra_conn_params}
-            if extra_conn_params is not None
-            else _default_extra_conn_params
-        )
-
-        self._hive_options = HiveOptions(
-            host=host,
-            port=port,
-            table_ref=table_ref,
-            extra_conn_params=_extra_conn_params,
-        )
+        self._hive_options = HiveOptions(table_ref=table_ref)
 
         super().__init__(
             event_timestamp_column,
@@ -159,11 +91,7 @@ class HiveSource(DataSource):
             raise TypeError("Comparisons should only involve HiveSource class objects.")
 
         return (
-            self.hive_options.host == other.hive_options.host
-            and self.hive_options.port == other.hive_options.host
-            and self.hive_options.table_ref == other.hive_options.table_ref
-            and self.hive_options.extra_conn_params
-            == other.hive_options.extra_conn_params
+            self.hive_options.table_ref == other.hive_options.table_ref
             and self.event_timestamp_column == other.event_timestamp_column
             and self.created_timestamp_column == other.created_timestamp_column
             and self.field_mapping == other.field_mapping
@@ -185,32 +113,18 @@ class HiveSource(DataSource):
         self._hive_options = hive_options
 
     @property
-    def host(self):
-        return self._hive_options.host
-
-    @property
-    def port(self):
-        return self._hive_options.port
-
-    @property
     def table_ref(self):
         return self._hive_options.table_ref
-
-    @property
-    def extra_conn_params(self):
-        return self._hive_options.extra_conn_params
-
-    @property
-    def all_conn_params(self):
-        return {"host": self.host, "port": self.port, **self.extra_conn_params}
 
     def to_proto(self) -> None:
         pass
 
     def validate(self, config: RepoConfig):
-        from impala.dbapi import connect
+        from feast_hive.offline_store import HiveOfflineStoreConfig
+        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
 
-        with connect(**self.all_conn_params) as conn:
+        from impala.dbapi import connect
+        with connect(**config.offline_store.dict(exclude={'type'})) as conn:
             cursor = conn.cursor()
             table_ref_splits = self.table_ref.rsplit(".", 1)
             if len(table_ref_splits) == 2:
@@ -227,9 +141,12 @@ class HiveSource(DataSource):
     def get_table_column_names_and_types(
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
+        from feast_hive.offline_store import HiveOfflineStoreConfig
+        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
+
         from impala.dbapi import connect
 
-        with connect(**self.all_conn_params) as conn:
+        with connect(**config.offline_store.dict(exclude={'type'})) as conn:
             cursor = conn.cursor()
             cursor.execute(f"desc {self.table_ref}")
             name_type_pairs = []

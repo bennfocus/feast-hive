@@ -10,8 +10,9 @@ from feast.data_source import DataSource
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+from pydantic import StrictStr, StrictInt, StrictBool
 
-from .data_source import HiveSource
+from feast_hive.data_source import HiveSource
 
 try:
     from impala.dbapi import connect
@@ -26,6 +27,45 @@ except ImportError as e:
 class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store config for Hive """
 
+    type: Literal["hive"] = "hive"
+    """ Offline store type selector """
+
+    host: StrictStr
+    """ The hostname for HiveServer2 """
+
+    port: StrictInt = 10000
+    """ The port number for HiveServer2 (default is 10000) """
+
+    database: Optional[StrictStr] = None
+    """ The default database. If `None`, the result is implementation-dependent """
+
+    timeout: Optional[StrictInt] = None
+    """ Connection timeout in seconds. Default is no timeout """
+
+    use_ssl: StrictBool = False
+    """ Enable SSL """
+
+    ca_cert: Optional[StrictStr] = None
+    """ Local path to the the third-party CA certificate. If SSL is enabled but
+        the certificate is not specified, the server certificate will not be
+        validated. """
+
+    auth_mechanism: StrictStr = 'PLAIN'
+    """ Specify the authentication mechanism. `'PLAIN'` for unsecured, `'GSSAPI'` for Kerberos and `'LDAP'` for Kerberos with
+        LDAP. """
+
+    user: Optional[StrictStr] = None
+    """ LDAP user, if applicable. """
+
+    password: Optional[StrictStr] = None
+    """ LDAP password, if applicable. """
+
+    use_http_transport: StrictBool = False
+    """ Set it to True to use http transport of False to use binary transport. """
+
+    http_path: StrictStr = ''
+    """ Specify the path in the http URL. Used only when `use_http_transport` is True. """
+
 
 class HiveOfflineStore(OfflineStore):
     @staticmethod
@@ -39,9 +79,10 @@ class HiveOfflineStore(OfflineStore):
         start_date: datetime,
         end_date: datetime,
     ) -> RetrievalJob:
+        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
         assert isinstance(data_source, HiveSource)
-        from_expression = data_source.table_ref
 
+        table_ref = data_source.table_ref
         partition_by_join_key_string = ", ".join(join_key_columns)
         if partition_by_join_key_string != "":
             partition_by_join_key_string = (
@@ -53,13 +94,13 @@ class HiveOfflineStore(OfflineStore):
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
         field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
 
-        with connect(**data_source.all_conn_params) as conn:
+        with connect(**config.offline_store.dict(exclude={'type'})) as conn:
             query = f"""
             SELECT {field_string}
             FROM (
                 SELECT {field_string},
                 ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS _feast_row
-                FROM {from_expression} t1
+                FROM {table_ref} t1
                 WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
             ) t2
             WHERE _feast_row = 1
@@ -83,12 +124,21 @@ class HiveOfflineStore(OfflineStore):
 
         expected_join_keys = _get_join_keys(project, feature_views, registry)
 
+        # with connect(**config.offline_store.dict(exclude={'type'})) as conn:
+        #     table = _upload_entity_df(
+        #         client=client,
+        #         project=config.project,
+        #         dataset_name=config.offline_store.dataset,
+        #         dataset_project=client.project,
+        #         entity_df=entity_df,
+        #     )
+
 
 class HiveRetrievalJob(RetrievalJob):
     def __init__(self, cursor: HiveServer2Cursor):
         self.cursor = cursor
 
-    def to_df(self):
+    def to_df(self) -> pandas.DataFrame:
         self._waiting_results()
         df = pandas.DataFrame(
             self.cursor.fetchall(),
@@ -114,3 +164,7 @@ def _get_join_keys(
             entity = registry.get_entity(entity_name, project)
             join_keys.add(entity.join_key)
     return join_keys
+
+
+def _upload_entity_df():
+    pass
