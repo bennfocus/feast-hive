@@ -12,16 +12,14 @@ class HiveOptions:
 
     def __init__(
         self,
-        host: Optional[str],
+        host: str,
+        table_ref: str,
         port: Optional[int],
-        table_ref: Optional[str],
-        query: Optional[str],
         extra_conn_params: Optional[Dict[str, Any]],
     ):
         self._host = host
         self._port = port
         self._table_ref = table_ref
-        self._query = query
         self._extra_conn_params = extra_conn_params
 
     @property
@@ -67,20 +65,6 @@ class HiveOptions:
         self._table_ref = table_ref
 
     @property
-    def query(self):
-        """
-        Returns the query of this data source
-        """
-        return self._query
-
-    @query.setter
-    def query(self, query):
-        """
-        Sets the query of this data source
-        """
-        self._query = query
-
-    @property
     def extra_conn_params(self):
         """
         Returns the extra connection parameters of this data source
@@ -122,10 +106,9 @@ class HiveOptions:
 class HiveSource(DataSource):
     def __init__(
         self,
-        host: Optional[str] = None,
+        host: str,
+        table_ref: str,
         port: Optional[int] = 10000,
-        table_ref: Optional[str] = None,
-        query: Optional[str] = None,
         extra_conn_params: Optional[Dict[str, Any]] = None,
         event_timestamp_column: Optional[str] = "",
         created_timestamp_column: Optional[str] = "",
@@ -137,7 +120,6 @@ class HiveSource(DataSource):
         :param host: What host HiveServer2 runs on.
         :param port: What port HiveServer2 runs on. Defaults to 10000.
         :param table_ref: The table ref of the data source.
-        :param query: In case the data in data source ont in one table/view.
         :param extra_conn_params: Extra connection params besides the host and port.
             Check here for the complete params list: https://github.com/cloudera/impyla/blob/255b07ed973d47a3395214ed92d35ec0615ebf62/impala/dbapi.py#L40
         :param event_timestamp_column:
@@ -145,6 +127,11 @@ class HiveSource(DataSource):
         :param field_mapping:
         :param date_partition_column:
         """
+
+        assert host is not None and host != "", '"host" is required for HiveSource'
+        assert (
+            table_ref is not None and table_ref != ""
+        ), '"table_ref" is required for HiveSource'
 
         _default_extra_conn_params = {"auth_mechanism": "PLAIN"}
         _extra_conn_params = (
@@ -157,7 +144,6 @@ class HiveSource(DataSource):
             host=host,
             port=port,
             table_ref=table_ref,
-            query=query,
             extra_conn_params=_extra_conn_params,
         )
 
@@ -176,7 +162,6 @@ class HiveSource(DataSource):
             self.hive_options.host == other.hive_options.host
             and self.hive_options.port == other.hive_options.host
             and self.hive_options.table_ref == other.hive_options.table_ref
-            and self.hive_options.query == other.hive_options.query
             and self.hive_options.extra_conn_params
             == other.hive_options.extra_conn_params
             and self.event_timestamp_column == other.event_timestamp_column
@@ -212,10 +197,6 @@ class HiveSource(DataSource):
         return self._hive_options.table_ref
 
     @property
-    def query(self):
-        return self._hive_options.query
-
-    @property
     def extra_conn_params(self):
         return self._hive_options.extra_conn_params
 
@@ -227,29 +208,21 @@ class HiveSource(DataSource):
         pass
 
     def validate(self, config: RepoConfig):
-        if not self.query:
-            from impala.dbapi import connect
+        from impala.dbapi import connect
 
-            with connect(**self.all_conn_params) as conn:
-                cursor = conn.cursor()
-                table_ref_splits = self.table_ref.rsplit(".", 1)
-                if len(table_ref_splits) == 2:
-                    cursor.execute(f"use {table_ref_splits[0]}")
-                    table_ref_splits.pop(0)
-                cursor.execute(f'show tables like "{table_ref_splits[0]}"')
-                if not cursor.fetchone():
-                    raise DataSourceNotFoundException(self.table_ref)
-
-    def get_table_query_string(self) -> str:
-        """Returns a string that can directly be used to reference this table in SQL"""
-        if self.table_ref:
-            return f"`{self.table_ref}`"
-        else:
-            return f"({self.query})"
+        with connect(**self.all_conn_params) as conn:
+            cursor = conn.cursor()
+            table_ref_splits = self.table_ref.rsplit(".", 1)
+            if len(table_ref_splits) == 2:
+                cursor.execute(f"use {table_ref_splits[0]}")
+                table_ref_splits.pop(0)
+            cursor.execute(f'show tables like "{table_ref_splits[0]}"')
+            if not cursor.fetchone():
+                raise DataSourceNotFoundException(self.table_ref)
 
     @staticmethod
     def source_datatype_to_feast_value_type() -> Callable[[str], ValueType]:
-        return hive_to_feast_value_type
+        return _hive_to_feast_value_type
 
     def get_table_column_names_and_types(
         self, config: RepoConfig
@@ -258,25 +231,19 @@ class HiveSource(DataSource):
 
         with connect(**self.all_conn_params) as conn:
             cursor = conn.cursor()
-            if self.table_ref is not None:
-                cursor.execute(f"desc {self.table_ref}")
-                name_type_pairs = []
-                for field in cursor.fetchall():
-                    if field[0] == "":
-                        break
-                    name_type_pairs.append(
-                        (field[0], str(field[1]).upper().split("<", 1)[0])
-                    )
-            else:
-                cursor.execute(f"SELECT * FROM ({self.query}) t LIMIT 1")
-                name_type_pairs = [
-                    (info[0], str(info[1]).upper()) for info in cursor.description
-                ]
+            cursor.execute(f"desc {self.table_ref}")
+            name_type_pairs = []
+            for field in cursor.fetchall():
+                if field[0] == "":
+                    break
+                name_type_pairs.append(
+                    (field[0], str(field[1]).upper().split("<", 1)[0])
+                )
 
             return name_type_pairs
 
 
-def hive_to_feast_value_type(hive_type_as_str: str):
+def _hive_to_feast_value_type(hive_type_as_str: str):
     type_map: Dict[str, ValueType] = {
         # Numeric Types
         "TINYINT": ValueType.INT32,
@@ -306,5 +273,4 @@ def hive_to_feast_value_type(hive_type_as_str: str):
         "UNIONTYPE": ValueType.STRING,
         "NULL": ValueType.STRING,
     }
-
     return type_map[hive_type_as_str]

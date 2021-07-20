@@ -40,7 +40,7 @@ class HiveOfflineStore(OfflineStore):
         end_date: datetime,
     ) -> RetrievalJob:
         assert isinstance(data_source, HiveSource)
-        from_expression = data_source.get_table_query_string()
+        from_expression = data_source.table_ref
 
         partition_by_join_key_string = ", ".join(join_key_columns)
         if partition_by_join_key_string != "":
