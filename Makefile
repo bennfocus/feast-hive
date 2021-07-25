@@ -14,4 +14,4 @@ lint:
 	cd ${ROOT_DIR}; black --check feast_hive tests
 
 test:
-	FEAST_HIVE_HOST=localhost FEAST_HIVE_PORT=10000 pytest --verbose --color=yes tests
+	pytest --verbose --color=yes -s tests

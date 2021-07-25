@@ -11,8 +11,7 @@ class HiveOptions:
     """
 
     def __init__(
-        self,
-        table_ref: str,
+        self, table_ref: str,
     ):
         self._table_ref = table_ref
 
@@ -121,10 +120,12 @@ class HiveSource(DataSource):
 
     def validate(self, config: RepoConfig):
         from feast_hive.offline_store import HiveOfflineStoreConfig
+
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
 
         from impala.dbapi import connect
-        with connect(**config.offline_store.dict(exclude={'type'})) as conn:
+
+        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
             cursor = conn.cursor()
             table_ref_splits = self.table_ref.rsplit(".", 1)
             if len(table_ref_splits) == 2:
@@ -142,11 +143,12 @@ class HiveSource(DataSource):
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
         from feast_hive.offline_store import HiveOfflineStoreConfig
+
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
 
         from impala.dbapi import connect
 
-        with connect(**config.offline_store.dict(exclude={'type'})) as conn:
+        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
             cursor = conn.cursor()
             cursor.execute(f"desc {self.table_ref}")
             name_type_pairs = []

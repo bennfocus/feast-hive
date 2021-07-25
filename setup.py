@@ -33,6 +33,7 @@ setup(
         ],
         "test": [
             "pytest==6.0.0",
+            "pytest-benchmark==3.4.1"
         ]
     },
     keywords=('feast featurestore hive offlinestore'),
