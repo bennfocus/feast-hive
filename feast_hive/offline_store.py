@@ -23,21 +23,22 @@ except ImportError as e:
     raise FeastExtrasDependencyImportError("hive", str(e))
 
 _PANDAS_DTYPES_TO_HIVE = {
-    "string": "STRING",
     "object": "STRING",
+    "string": "STRING",
     "bool": "BOOLEAN",
-    "datetime64[ns]": "TIMESTAMP",
     "datetime64[ns, UTC]": "TIMESTAMP",
+    "datetime64[ns]": "TIMESTAMP",
     "float32": "FLOAT",
     "float64": "DOUBLE",
+    "uint8": "SMALLINT",
+    "uint16": "INT",
+    "uint32": "BIGINT",
     "int8": "TINYINT",
     "int16": "SMALLINT",
     "int32": "INT",
     "int64": "BIGINT",
-    "uint8": "SMALLINT",
-    "uint16": "INT",
-    "uint32": "BIGINT",
 }
+# be careful of duplicated hive types
 _HIVE_TYPES_TO_PANDAS = {v: k for k, v in _PANDAS_DTYPES_TO_HIVE.items()}
 _ENTITY_UPLOADING_CHUNK_SIZE = 10000
 
@@ -218,7 +219,7 @@ def _get_join_keys(
 
 def _create_entity_table(
     project: str, cursor: _Cursor, entity_df: Union[pandas.DataFrame, str],
-) -> None:
+) -> str:
     entity_table_ref = f"entity_df_{project}_{int(time.time())}"
 
     # cursor.execute('set hive.exec.temporary.table.storage = memory')
@@ -231,6 +232,8 @@ def _create_entity_table(
             f"The entity dataframe you have provided must be a Pandas DataFrame or HQL query, "
             f"but we found: {type(entity_df)} "
         )
+
+    return entity_table_ref
 
 
 def _upload_entity_df_to_hive(

@@ -46,6 +46,9 @@ registry: ...
 provider: local
 offline_store:
     type: feast_hive.HiveOfflineStore
+    host: localhost
+    port: 10000 # default
+    ... # other parameters
 online_store:
     ...
 ```
@@ -63,8 +66,6 @@ from feast_hive import HiveSource
 # Read data from Hive table
 # Need make sure the table_ref exists and have data before continue.
 driver_hourly_stats = HiveSource(
-    host='localhost',
-    port=10000,
     table_ref='example.driver_stats',
     event_timestamp_column="datetime",
     created_timestamp_column="created",
@@ -108,7 +109,7 @@ The rest are as same as [Feast Quickstart](https://docs.feast.dev/quickstart#gen
 git clone https://github.com/baineng/feast-hive.git
 cd feast-hive
 # creating virtual env ...
-pip install .[dev]
+pip install -e .[dev]
 
 # before commit
 make format
@@ -118,6 +119,6 @@ makr lint
 #### Testing
 
 ```shell
-pip install .[test]
+pip install -e .[test]
 FEAST_HIVE_HOST=localhost FEAST_HIVE_PORT=10000 pytest --verbose --color=yes tests
 ```
