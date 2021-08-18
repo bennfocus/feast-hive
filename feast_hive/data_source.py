@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
 from feast.errors import DataSourceNotFoundException
+from feast_hive.type_map import hive_to_feast_value_type
 
 
 class HiveOptions:
@@ -137,7 +138,7 @@ class HiveSource(DataSource):
 
     @staticmethod
     def source_datatype_to_feast_value_type() -> Callable[[str], ValueType]:
-        return _hive_to_feast_value_type
+        return hive_to_feast_value_type
 
     def get_table_column_names_and_types(
         self, config: RepoConfig
@@ -160,36 +161,3 @@ class HiveSource(DataSource):
                 )
 
             return name_type_pairs
-
-
-def _hive_to_feast_value_type(hive_type_as_str: str):
-    type_map: Dict[str, ValueType] = {
-        # Numeric Types
-        "TINYINT": ValueType.INT32,
-        "SMALLINT": ValueType.INT32,
-        "INT": ValueType.INT32,
-        "INTEGER": ValueType.INT32,
-        "BIGINT": ValueType.INT64,
-        "FLOAT": ValueType.DOUBLE,
-        "DOUBLE": ValueType.DOUBLE,
-        "DECIMAL": ValueType.STRING,
-        "NUMERIC": ValueType.STRING,
-        # Date/Time Types
-        "TIMESTAMP": ValueType.STRING,
-        "DATE": ValueType.STRING,
-        "INTERVAL": ValueType.STRING,
-        # String Types
-        "STRING": ValueType.STRING,
-        "VARCHAR": ValueType.STRING,
-        "CHAR": ValueType.STRING,
-        # Misc Types
-        "BOOLEAN": ValueType.BOOL,
-        "BINARY": ValueType.BYTES,
-        # Complex Types
-        "MAP": ValueType.STRING,
-        "ARRAY": ValueType.STRING,
-        "STRUCT": ValueType.STRING,
-        "UNIONTYPE": ValueType.STRING,
-        "NULL": ValueType.STRING,
-    }
-    return type_map[hive_type_as_str]

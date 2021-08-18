@@ -1,11 +1,29 @@
+import contextlib
+import functools
 from datetime import timedelta
 from enum import Enum
 
-from pytz import FixedOffset, timezone, utc
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+from impala.dbapi import connect
+from pytz import FixedOffset, timezone, utc
 
-_DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL = "event_timestamp"
+DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL = "event_timestamp"
+
+
+def with_cursor(test_func):
+    # @functools.wraps(test_func)
+    def wrapper(pytestconfig, *args, **kwargs):
+        with connect(
+            pytestconfig.getoption("hive_host"),
+            int(pytestconfig.getoption("hive_port")),
+            auth_mechanism=pytestconfig.getoption("hive_auth_mechanism"),
+        ) as conn:
+            with conn.cursor() as cursor:
+                test_func(cursor, *args, **kwargs)
+
+    return wrapper
 
 
 class EventTimestampType(Enum):
@@ -64,7 +82,7 @@ def create_orders_df(
             by=["e_ts", "order_id", "driver_id", "customer_id"], inplace=True,
         )
     else:
-        df[_DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL] = [
+        df[DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL] = [
             _convert_event_timestamp(
                 pd.Timestamp(dt, unit="ms", tz="UTC").round("ms"),
                 EventTimestampType(idx % 4),
@@ -75,7 +93,7 @@ def create_orders_df(
         ]
         df.sort_values(
             by=[
-                _DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL,
+                DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL,
                 "order_id",
                 "driver_id",
                 "customer_id",

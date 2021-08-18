@@ -120,5 +120,5 @@ makr lint
 
 ```shell
 pip install -e .[test]
-FEAST_HIVE_HOST=localhost FEAST_HIVE_PORT=10000 pytest --verbose --color=yes tests
+pytest --hive_host=localhost --hive_port=10000
 ```

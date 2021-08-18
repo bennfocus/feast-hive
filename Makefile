@@ -12,6 +12,3 @@ lint:
 	cd ${ROOT_DIR}; isort feast_hive/ tests/ --check-only
 	cd ${ROOT_DIR}; flake8 feast_hive/ tests/
 	cd ${ROOT_DIR}; black --check feast_hive tests
-
-test:
-	pytest --verbose --color=yes -s tests
