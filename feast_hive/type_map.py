@@ -65,7 +65,7 @@ def hive_to_pa_value_type(hive_type_as_str: str) -> str:
     type_map = {
         "null": "null",
         "boolean": "bool",
-        "timestamp": "timestamp[s]",
+        "timestamp": "timestamp[us]",
         "date": "date",
         "tinyint": "int8",
         "smallint": "int16",

@@ -21,7 +21,7 @@ from feast_hive.type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
 try:
     from impala.dbapi import connect
-    from impala.hiveserver2 import HiveServer2Cursor, OperationalError
+    from impala.hiveserver2 import CBatch, HiveServer2Cursor, OperationalError
 
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -178,41 +178,21 @@ class HiveRetrievalJob(RetrievalJob):
         return self.to_arrow().to_pandas()
 
     def to_arrow(self) -> pa.Table:
-        self._wait_results()
-        return _convert_hive_data_to_arrow(
-            self._cursor.fetchall(), self._cursor.description
-        )
-
-    def _wait_results(self):
-        loop_start = time.time()
-        cur = self._cursor
-        try:
-            while True:
-                state = cur.status()
-                if cur._op_state_is_error(state):
-                    raise OperationalError("Operation is in ERROR_STATE")
-                if not cur._op_state_is_executing(state):
-                    break
-                time.sleep(self._get_sleep_interval(loop_start))
-        except KeyboardInterrupt:
-            print("Canceling query")
-            cur.cancel_operation()
-            raise
+        batches = self._cursor.fetchcolumnar()
+        pa_batches = [self._convert_hive_batch_to_arrow_batch(b) for b in batches]
+        return pa.Table.from_batches(pa_batches)
 
     @staticmethod
-    def _get_sleep_interval(self, start_time) -> float:
-        """Returns a step function of time to sleep in seconds before polling
-        again. Maximum sleep is 1s, minimum is 0.1s"""
-        elapsed = time.time() - start_time
-        if elapsed < 0.05:
-            return 0.01
-        elif elapsed < 1.0:
-            return 0.05
-        elif elapsed < 10.0:
-            return 0.1
-        elif elapsed < 60.0:
-            return 0.5
-        return 1.0
+    def _convert_hive_batch_to_arrow_batch(hive_batch: CBatch) -> pa.RecordBatch:
+        return pa.record_batch(
+            [column.values for column in hive_batch.columns],
+            pa.schema(
+                [
+                    (field_info[0], hive_to_pa_value_type(field_info[1]))
+                    for field_info in hive_batch.schema
+                ]
+            ),
+        )
 
 
 def _upload_entity_df_and_get_entity_schema(
@@ -224,9 +204,7 @@ def _upload_entity_df_and_get_entity_schema(
     elif isinstance(entity_df, str):
         cursor.execute(f"CREATE TEMPORARY TABLE {table_name} AS ({entity_df})")
         cursor.execute(f"SELECT * FROM {table_name} LIMIT 1")
-        limited_entity_df = _convert_hive_data_to_arrow(
-            cursor.fetchall(), cursor._description
-        )
+        limited_entity_df = HiveRetrievalJob(cursor).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
         raise InvalidEntityType(type(entity_df))
@@ -247,65 +225,56 @@ def _upload_entity_df(
     """
     entity_df.reset_index(drop=True, inplace=True)
 
-    pa_schema = pa.Schema.from_pandas(entity_df)
-    schema = []
-    for field in pa_schema:
+    pa_table = pa.Table.from_pandas(entity_df)
+    hive_schema = []
+    for field in pa_table.schema:
         hive_type = pa_to_hive_value_type(str(field.type))
         if not hive_type:
             raise ValueError(f'Not supported type "{field.type}" in entity_df.')
-        schema.append((field.name, hive_type))
+        hive_schema.append((field.name, hive_type))
 
     # Create Hive temporary table according to entity_df schema
     create_entity_table_sql = f"""
         CREATE TEMPORARY TABLE {table_name} (
-          {', '.join([f'{col_name} {col_type}' for col_name, col_type in schema])}
+          {', '.join([f'{col_name} {col_type}' for col_name, col_type in hive_schema])}
         )
         """
     cursor.execute(create_entity_table_sql)
 
-    def wrap_sql_value(value, col_type):
-        if col_type.lower() in ["string", "timestamp", "date"]:
-            return f'"{value}"'
+    def preprocess_value(raw_value, col_type):
+        col_type = col_type.lower()
+
+        if col_type == "timestamp" and isinstance(raw_value, datetime):
+            raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
+            return f'"{raw_value}"'
+
+        if col_type in ["string", "timestamp", "date"]:
+            return f'"{raw_value}"'
         else:
-            return value
+            return str(raw_value)
 
     # Upload entity_df to the Hive table by multiple rows insert method
-    entity_count = len(entity_df)
+    entity_count = len(pa_table)
     chunk_size = (
         entity_count
         if _ENTITY_UPLOADING_CHUNK_SIZE <= 0
         else _ENTITY_UPLOADING_CHUNK_SIZE
     )
-    chunks = (entity_count // chunk_size) + 1
-    for i in range(chunks):
-        start_i = i * chunk_size
-        end_i = min((i + 1) * chunk_size, entity_count)
-        if start_i >= end_i:
-            break
-
+    for batch in pa_table.to_batches(chunk_size):
         chunk_data = []
-        for j in range(start_i, end_i):
+        for i in range(len(batch)):
             chunk_data.append(
                 [
-                    wrap_sql_value(str(entity_df.loc[j, col_name]), col_type)
-                    for col_name, col_type in schema
+                    preprocess_value(batch.columns[j][i].as_py(), hive_schema[j][1])
+                    for j in range(len(hive_schema))
                 ]
             )
 
-        insert_entity_chunk_sql = f"""
+        entity_chunk_insert_sql = f"""
             INSERT INTO TABLE {table_name}
-            VALUES ({'), ('.join([', '.join(entity_row) for entity_row in chunk_data])})
+            VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
         """
-        cursor.execute(insert_entity_chunk_sql)
-
-
-def _convert_hive_data_to_arrow(
-    data: Dict[str, Any], schema: List[Tuple[str, str]]
-) -> pa.Table:
-    pa_schema = pa.schema(
-        [(field[0], hive_to_pa_value_type(field[1])) for field in schema]
-    )
-    return pa.table(data, schema=pa_schema)
+        cursor.execute(entity_chunk_insert_sql)
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
