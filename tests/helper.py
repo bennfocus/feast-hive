@@ -15,15 +15,18 @@ DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL = "event_timestamp"
 def with_cursor(test_func):
     # @functools.wraps(test_func)
     def wrapper(pytestconfig, *args, **kwargs):
-        with connect(
-            pytestconfig.getoption("hive_host"),
-            int(pytestconfig.getoption("hive_port")),
-            auth_mechanism=pytestconfig.getoption("hive_auth_mechanism"),
-        ) as conn:
-            with conn.cursor() as cursor:
-                test_func(cursor, *args, **kwargs)
+        with get_hive_cursor(pytestconfig) as cursor:
+            test_func(cursor, *args, **kwargs)
 
     return wrapper
+
+
+def get_hive_cursor(pytestconfig):
+    with connect(
+        pytestconfig.getoption("hive_host"), int(pytestconfig.getoption("hive_port"))
+    ) as conn:
+        with conn.cursor() as cursor:
+            yield cursor
 
 
 class EventTimestampType(Enum):

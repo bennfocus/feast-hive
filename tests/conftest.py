@@ -7,8 +7,3 @@ def pytest_addoption(parser):
     """Adds a new command line options to py.test"""
     parser.addoption("--hive_host", default=DEFAULT_HIVE_HOST, help="Hive Host")
     parser.addoption("--hive_port", default=DEFAULT_HIVE_PORT, help="Hive Port")
-    parser.addoption(
-        "--hive_auth_mechanism",
-        default=DEFAULT_HIVE_AUTH_MECHANISM,
-        help="Connection Auth Mechanism",
-    )
