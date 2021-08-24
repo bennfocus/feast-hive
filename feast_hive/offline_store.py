@@ -1,6 +1,6 @@
-import contextlib
+import time
 from datetime import datetime
-from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -15,12 +15,13 @@ from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+from feast.value_type import ValueType
 from feast_hive.data_source import HiveSource
 from feast_hive.type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
 try:
-    import impala
-    from impala.interface import Connection
+    from impala.dbapi import connect
+    from impala.hiveserver2 import CBatch, HiveServer2Cursor, OperationalError
 
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -28,10 +29,13 @@ except ImportError as e:
     raise FeastExtrasDependencyImportError("hive", str(e))
 
 
+_Cursor = HiveServer2Cursor
+
+
 class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store config for Hive """
 
-    type: Literal["hive"] = "hive"
+    type: StrictStr = "hive"
     """ Offline store type selector """
 
     host: StrictStr
@@ -63,6 +67,8 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
 
     password: Optional[StrictStr] = None
     """ LDAP password, if applicable. """
+
+    kerberos_service_name: Optional[StrictStr] = None
 
     use_http_transport: StrictBool = False
     """ Set it to True to use http transport of False to use binary transport. """
@@ -99,7 +105,9 @@ class HiveOfflineStore(OfflineStore):
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
         field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
 
-        query = f"""
+        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
+            with conn.cursor() as cursor:
+                query = f"""
                 SELECT {field_string}
                 FROM (
                     SELECT {field_string},
@@ -110,7 +118,9 @@ class HiveOfflineStore(OfflineStore):
                 WHERE _feast_row = 1
                 """
 
-        return HiveRetrievalJob(_get_connection(config.offline_store), query)
+                # execute the job now asynchronously, then block in to_df or to_arrow
+                cursor.execute_async(query)
+                return HiveRetrievalJob(cursor)
 
     @staticmethod
     def get_historical_features(
@@ -123,83 +133,59 @@ class HiveOfflineStore(OfflineStore):
         full_feature_names: bool = False,
     ) -> RetrievalJob:
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
-        conn = _get_connection(config.offline_store)
 
-        @contextlib.contextmanager
-        def query_generator() -> Iterator[str]:
-
-            table_name = offline_utils.get_temp_entity_table_name()
-
-            entity_schema = _upload_entity_df_and_get_entity_schema(
-                conn, table_name, entity_df
-            )
-
-            entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
-                entity_schema
-            )
-
-            expected_join_keys = offline_utils.get_expected_join_keys(
-                project, feature_views, registry
-            )
-
-            offline_utils.assert_expected_columns_in_entity_df(
-                entity_schema, expected_join_keys, entity_df_event_timestamp_col
-            )
-
-            query_context = offline_utils.get_feature_view_query_context(
-                feature_refs, feature_views, registry, project,
-            )
-
-            query = offline_utils.build_point_in_time_query(
-                query_context,
-                left_table_query_string=table_name,
-                entity_df_event_timestamp_col=entity_df_event_timestamp_col,
-                query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
-                full_feature_names=full_feature_names,
-            )
-
-            yield query
-
+        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
             with conn.cursor() as cursor:
-                cursor.execute(f"DROP TABLE {table_name}")
 
-        return HiveRetrievalJob(conn, query_generator)
+                table_name = offline_utils.get_temp_entity_table_name()
+
+                entity_schema = _upload_entity_df_and_get_entity_schema(
+                    table_name, entity_df, cursor
+                )
+
+                entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
+                    entity_schema
+                )
+
+                expected_join_keys = offline_utils.get_expected_join_keys(
+                    project, feature_views, registry
+                )
+
+                offline_utils.assert_expected_columns_in_entity_df(
+                    entity_schema, expected_join_keys, entity_df_event_timestamp_col
+                )
+
+                query_context = offline_utils.get_feature_view_query_context(
+                    feature_refs, feature_views, registry, project,
+                )
+
+                query = offline_utils.build_point_in_time_query(
+                    query_context,
+                    left_table_query_string=table_name,
+                    entity_df_event_timestamp_col=entity_df_event_timestamp_col,
+                    query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
+                    full_feature_names=full_feature_names,
+                )
+
+                # execute the job now asynchronously, then block in to_df or to_arrow
+                cursor.execute_async(query)
+                return HiveRetrievalJob(cursor)
 
 
 class HiveRetrievalJob(RetrievalJob):
-    def __init__(
-        self, conn: Connection, query: Union[str, Callable[[], ContextManager[str]]],
-    ):
-        if not isinstance(query, str):
-            self._query_generator = query
-        else:
-
-            @contextlib.contextmanager
-            def query_generator() -> Iterator[str]:
-                assert isinstance(query, str)
-                yield query
-
-            self._query_generator = query_generator
-
-        self._conn = conn
+    def __init__(self, cursor: _Cursor):
+        self._cursor = cursor
 
     def to_df(self) -> pd.DataFrame:
         return self.to_arrow().to_pandas()
 
     def to_arrow(self) -> pa.Table:
-        with self._query_generator() as query:
-            with self._conn.cursor() as cursor:
-                cursor.execute(query)
-                batches = cursor.fetchcolumnar()
-                pa_batches = [
-                    self._convert_hive_batch_to_arrow_batch(b) for b in batches
-                ]
-                return pa.Table.from_batches(pa_batches)
+        batches = self._cursor.fetchcolumnar()
+        pa_batches = [self._convert_hive_batch_to_arrow_batch(b) for b in batches]
+        return pa.Table.from_batches(pa_batches)
 
     @staticmethod
-    def _convert_hive_batch_to_arrow_batch(
-        hive_batch: impala.hiveserver2.CBatch,
-    ) -> pa.RecordBatch:
+    def _convert_hive_batch_to_arrow_batch(hive_batch: CBatch) -> pa.RecordBatch:
         return pa.record_batch(
             [column.values for column in hive_batch.columns],
             pa.schema(
@@ -211,23 +197,16 @@ class HiveRetrievalJob(RetrievalJob):
         )
 
 
-def _get_connection(offline_store_config: HiveOfflineStoreConfig) -> Connection:
-    assert isinstance(offline_store_config, HiveOfflineStoreConfig)
-    return impala.dbapi.connect(**offline_store_config.dict(exclude={"type"}))
-
-
 def _upload_entity_df_and_get_entity_schema(
-    conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
+    table_name: str, entity_df: Union[pd.DataFrame, str], cursor: _Cursor,
 ) -> Dict[str, np.dtype]:
     if isinstance(entity_df, pd.DataFrame):
-        _upload_entity_df(conn, table_name, entity_df)
+        _upload_entity_df(table_name, entity_df, cursor)
         return dict(zip(entity_df.columns, entity_df.dtypes))
     elif isinstance(entity_df, str):
-        with conn.cursor() as cursor:
-            cursor.execute(f"CREATE TEMPORARY TABLE {table_name} AS ({entity_df})")
-        limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} LIMIT 1"
-        ).to_df()
+        cursor.execute(f"CREATE TEMPORARY TABLE {table_name} AS ({entity_df})")
+        cursor.execute(f"SELECT * FROM {table_name} LIMIT 1")
+        limited_entity_df = HiveRetrievalJob(cursor).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
         raise InvalidEntityType(type(entity_df))
@@ -238,7 +217,7 @@ _ENTITY_UPLOADING_CHUNK_SIZE = 10000
 
 
 def _upload_entity_df(
-    conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
+    table_name: str, entity_df: Union[pd.DataFrame, str], cursor: _Cursor
 ) -> None:
     """Uploads a Pandas DataFrame to Hive as a temporary table (only exists in current session).
 
@@ -256,52 +235,57 @@ def _upload_entity_df(
             raise ValueError(f'Not supported type "{field.type}" in entity_df.')
         hive_schema.append((field.name, hive_type))
 
-    with conn.cursor() as cursor:
-        # Create Hive temporary table according to entity_df schema
-        create_entity_table_sql = f"""
-            CREATE TABLE {table_name} (
-              {', '.join([f'{col_name} {col_type}' for col_name, col_type in hive_schema])}
-            )
-            """
-        cursor.execute(create_entity_table_sql)
-
-        def preprocess_value(raw_value, col_type):
-            col_type = col_type.lower()
-
-            if col_type == "timestamp" and isinstance(raw_value, datetime):
-                raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
-                return f'"{raw_value}"'
-
-            if col_type in ["string", "timestamp", "date"]:
-                return f'"{raw_value}"'
-            else:
-                return str(raw_value)
-
-        # Upload entity_df to the Hive table by multiple rows insert method
-        entity_count = len(pa_table)
-        chunk_size = (
-            entity_count
-            if _ENTITY_UPLOADING_CHUNK_SIZE <= 0
-            else _ENTITY_UPLOADING_CHUNK_SIZE
+    # Create Hive temporary table according to entity_df schema
+    create_entity_table_sql = f"""
+        CREATE TEMPORARY TABLE {table_name} (
+          {', '.join([f'{col_name} {col_type}' for col_name, col_type in hive_schema])}
         )
-        for batch in pa_table.to_batches(chunk_size):
-            chunk_data = []
-            for i in range(len(batch)):
-                chunk_data.append(
-                    [
-                        preprocess_value(batch.columns[j][i].as_py(), hive_schema[j][1])
-                        for j in range(len(hive_schema))
-                    ]
-                )
+        """
+    cursor.execute(create_entity_table_sql)
 
-            entity_chunk_insert_sql = f"""
-                INSERT INTO TABLE {table_name}
-                VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
-            """
-            cursor.execute(entity_chunk_insert_sql)
+    def preprocess_value(raw_value, col_type):
+        col_type = col_type.lower()
+
+        if col_type == "timestamp" and isinstance(raw_value, datetime):
+            raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
+            return f'"{raw_value}"'
+
+        if col_type in ["string", "timestamp", "date"]:
+            return f'"{raw_value}"'
+        else:
+            return str(raw_value)
+
+    # Upload entity_df to the Hive table by multiple rows insert method
+    entity_count = len(pa_table)
+    chunk_size = (
+        entity_count
+        if _ENTITY_UPLOADING_CHUNK_SIZE <= 0
+        else _ENTITY_UPLOADING_CHUNK_SIZE
+    )
+    for batch in pa_table.to_batches(chunk_size):
+        chunk_data = []
+        for i in range(len(batch)):
+            chunk_data.append(
+                [
+                    preprocess_value(batch.columns[j][i].as_py(), hive_schema[j][1])
+                    for j in range(len(hive_schema))
+                ]
+            )
+
+        entity_chunk_insert_sql = f"""
+            INSERT INTO TABLE {table_name}
+            VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
+        """
+        cursor.execute(entity_chunk_insert_sql)
 
 
-# This query is based on sdk/python/feast/infra/offline_stores/redshift.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
+# This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
+# There are couple of changes from BigQuery:
+# 1. Use VARCHAR instead of STRING type
+# 2. Use "t - x * interval '1' second" instead of "Timestamp_sub(...)"
+# 3. Replace `SELECT * EXCEPT (...)` with `SELECT *`, because `EXCEPT` is not supported by Hive.
+#    Instead, we drop the column later after creating the table out of the query.
+# We need to keep this query in sync with BigQuery.
 
 MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
 /*

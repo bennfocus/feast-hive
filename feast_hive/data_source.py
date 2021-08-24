@@ -1,8 +1,10 @@
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
+import pickle
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
 from feast.errors import DataSourceNotFoundException
+from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast_hive.type_map import hive_to_feast_value_type
 
 
@@ -31,7 +33,7 @@ class HiveOptions:
         self._table_ref = table_ref
 
     @classmethod
-    def from_proto(cls, hive_options_proto: Any):
+    def from_proto(cls, hive_options_proto: DataSourceProto.CustomSourceOptions):
         """
         Creates a HiveOptions from a protobuf representation of a hive option
 
@@ -41,18 +43,26 @@ class HiveOptions:
         Returns:
             Returns a HiveOptions object based on the hive_options protobuf
         """
+        hive_configuration = pickle.loads(hive_options_proto.configuration)
 
-        pass
+        hive_options = cls(
+            table_ref=hive_configuration.table_ref
+        )
 
-    def to_proto(self) -> None:
+        return hive_options
+
+    def to_proto(self) -> DataSourceProto.CustomSourceOptions:
         """
         Converts an HiveOptionsProto object to its protobuf representation.
 
         Returns:
             HiveOptionsProto protobuf
         """
+        hive_options_proto = DataSourceProto.CustomSourceOptions(
+            configuration=pickle.dumps(self)
+        )
+        return hive_options_proto
 
-        pass
 
 
 class HiveSource(DataSource):
@@ -72,13 +82,11 @@ class HiveSource(DataSource):
         :param field_mapping:
         :param date_partition_column:
         """
-
         assert (
             table_ref is not None and table_ref != ""
         ), '"table_ref" is required for HiveSource'
 
         self._hive_options = HiveOptions(table_ref=table_ref)
-
         super().__init__(
             event_timestamp_column,
             created_timestamp_column,
@@ -116,8 +124,29 @@ class HiveSource(DataSource):
     def table_ref(self):
         return self._hive_options.table_ref
 
-    def to_proto(self) -> None:
-        pass
+    def to_proto(self) -> DataSourceProto:
+        data_source_proto = DataSourceProto(
+            type=DataSourceProto.CUSTOM_SOURCE,
+            field_mapping=self.field_mapping,
+            custom_options=self.hive_options.to_proto()
+        )
+        
+        data_source_proto.event_timestamp_column = self.event_timestamp_column
+        data_source_proto.created_timestamp_column = self.created_timestamp_column
+        data_source_proto.date_partition_column = self.date_partition_column
+        return data_source_proto
+
+    def from_proto(data_source:DataSourceProto):
+
+        assert data_source.HasField("custom_options")
+
+        return HiveSource(
+            field_mapping=dict(data_source.field_mapping),
+            table_ref=HiveOptions.from_proto(data_source.custom_options).table_ref,
+            event_timestamp_column=data_source.event_timestamp_column,
+            created_timestamp_column=data_source.created_timestamp_column,
+            date_partition_column=data_source.date_partition_column,
+        )
 
     def validate(self, config: RepoConfig):
         from feast_hive.offline_store import HiveOfflineStoreConfig
@@ -125,6 +154,7 @@ class HiveSource(DataSource):
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
 
         from impala.dbapi import connect
+        #from pyhive import hive
 
         with connect(**config.offline_store.dict(exclude={"type"})) as conn:
             cursor = conn.cursor()
