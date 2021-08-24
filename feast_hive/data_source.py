@@ -154,7 +154,6 @@ class HiveSource(DataSource):
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
 
         from impala.dbapi import connect
-        #from pyhive import hive
 
         with connect(**config.offline_store.dict(exclude={"type"})) as conn:
             cursor = conn.cursor()
