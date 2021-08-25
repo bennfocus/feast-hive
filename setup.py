@@ -13,7 +13,7 @@ INSTALL_REQUIRE = [
     "impyla==0.17.0",
 ]
 
-TEST_REQUIRE = ["pytest==6.0.0"]
+TEST_REQUIRE = ["pytest==6.0.0", "assertpy==1.1"]
 
 DEV_REQUIRE = [
     "flake8",

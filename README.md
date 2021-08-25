@@ -3,7 +3,9 @@
 Hive is not included in current [Feast](https://github.com/feast-dev/feast) roadmap, this project intends to add Hive support for Offline Store.  
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
-**Important:** This project is still being developed and not ready for using yet, please let me know if any of you need it, I will probably give it more priority.
+**Important: This project is still being developed and not ready for using yet, I am going make a first workable release in a couple of days.**
+
+**currently only supports `multiple insert` for uploading entity_df, which will be a little unefficient, going to provider another choice for users who are able to provider WebHDFS"* 
 
 ## Quickstart
 
@@ -64,15 +66,15 @@ from feast import Entity, Feature, FeatureView, ValueType
 from feast_hive import HiveSource
 
 # Read data from Hive table
-# Need make sure the table_ref exists and have data before continue.
+# Need make sure the table exists and have data before continue.
 driver_hourly_stats = HiveSource(
-    table_ref='example.driver_stats',
+    table='example.driver_stats',
     event_timestamp_column="datetime",
     created_timestamp_column="created",
 )
 
 # Define an entity for the driver.
-driver = Entity(name="driver_id", value_type=ValueType.INT64, description="driver id",)
+driver = Entity(name="driver_id", value_type=ValueType.INT64, description="driver id", )
 
 # Define FeatureView
 driver_hourly_stats_view = FeatureView(
@@ -120,5 +122,5 @@ makr lint
 
 ```shell
 pip install -e .[test]
-pytest --hive_host=localhost --hive_port=10000
+pytest --hs2_host=localhost --hs2_port=10000
 ```

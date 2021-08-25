@@ -19,7 +19,8 @@ from feast_hive.data_source import HiveSource
 from feast_hive.type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
 try:
-    import impala
+    from impala.dbapi import connect as impala_connect
+    from impala.hiveserver2 import CBatch as ImpalaCBatch
     from impala.interface import Connection
 
 except ImportError as e:
@@ -86,7 +87,7 @@ class HiveOfflineStore(OfflineStore):
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
         assert isinstance(data_source, HiveSource)
 
-        from_expression = data_source.table
+        from_expression = data_source.get_table_query_string()
 
         partition_by_join_key_string = ", ".join(join_key_columns)
         if partition_by_join_key_string != "":
@@ -127,41 +128,42 @@ class HiveOfflineStore(OfflineStore):
 
         @contextlib.contextmanager
         def query_generator() -> Iterator[str]:
-
             table_name = offline_utils.get_temp_entity_table_name()
 
-            entity_schema = _upload_entity_df_and_get_entity_schema(
-                conn, table_name, entity_df
-            )
+            try:
+                entity_schema = _upload_entity_df_and_get_entity_schema(
+                    conn, table_name, entity_df
+                )
 
-            entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
-                entity_schema
-            )
+                entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
+                    entity_schema
+                )
 
-            expected_join_keys = offline_utils.get_expected_join_keys(
-                project, feature_views, registry
-            )
+                expected_join_keys = offline_utils.get_expected_join_keys(
+                    project, feature_views, registry
+                )
 
-            offline_utils.assert_expected_columns_in_entity_df(
-                entity_schema, expected_join_keys, entity_df_event_timestamp_col
-            )
+                offline_utils.assert_expected_columns_in_entity_df(
+                    entity_schema, expected_join_keys, entity_df_event_timestamp_col
+                )
 
-            query_context = offline_utils.get_feature_view_query_context(
-                feature_refs, feature_views, registry, project,
-            )
+                query_context = offline_utils.get_feature_view_query_context(
+                    feature_refs, feature_views, registry, project,
+                )
 
-            query = offline_utils.build_point_in_time_query(
-                query_context,
-                left_table_query_string=table_name,
-                entity_df_event_timestamp_col=entity_df_event_timestamp_col,
-                query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
-                full_feature_names=full_feature_names,
-            )
+                query = offline_utils.build_point_in_time_query(
+                    query_context,
+                    left_table_query_string=table_name,
+                    entity_df_event_timestamp_col=entity_df_event_timestamp_col,
+                    query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
+                    full_feature_names=full_feature_names,
+                )
 
-            yield query
+                yield query
 
-            with conn.cursor() as cursor:
-                cursor.execute(f"DROP TABLE {table_name}")
+            finally:
+                with conn.cursor() as cursor:
+                    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         return HiveRetrievalJob(conn, query_generator)
 
@@ -197,9 +199,7 @@ class HiveRetrievalJob(RetrievalJob):
                 return pa.Table.from_batches(pa_batches)
 
     @staticmethod
-    def _convert_hive_batch_to_arrow_batch(
-        hive_batch: impala.hiveserver2.CBatch,
-    ) -> pa.RecordBatch:
+    def _convert_hive_batch_to_arrow_batch(hive_batch: ImpalaCBatch,) -> pa.RecordBatch:
         return pa.record_batch(
             [column.values for column in hive_batch.columns],
             pa.schema(
@@ -211,9 +211,9 @@ class HiveRetrievalJob(RetrievalJob):
         )
 
 
-def _get_connection(offline_store_config: HiveOfflineStoreConfig) -> Connection:
-    assert isinstance(offline_store_config, HiveOfflineStoreConfig)
-    return impala.dbapi.connect(**offline_store_config.dict(exclude={"type"}))
+def _get_connection(store_config: HiveOfflineStoreConfig) -> Connection:
+    assert isinstance(store_config, HiveOfflineStoreConfig)
+    return impala_connect(**store_config.dict(exclude={"type"}))
 
 
 def _upload_entity_df_and_get_entity_schema(
@@ -224,7 +224,9 @@ def _upload_entity_df_and_get_entity_schema(
         return dict(zip(entity_df.columns, entity_df.dtypes))
     elif isinstance(entity_df, str):
         with conn.cursor() as cursor:
-            cursor.execute(f"CREATE TEMPORARY TABLE {table_name} AS ({entity_df})")
+            cursor.execute(
+                f"CREATE TABLE {table_name} STORED AS PARQUET AS ({entity_df})"
+            )
         limited_entity_df = HiveRetrievalJob(
             conn, f"SELECT * FROM {table_name} LIMIT 1"
         ).to_df()
@@ -262,6 +264,7 @@ def _upload_entity_df(
             CREATE TABLE {table_name} (
               {', '.join([f'{col_name} {col_type}' for col_name, col_type in hive_schema])}
             )
+            STORED AS PARQUET
             """
         cursor.execute(create_entity_table_sql)
 
@@ -284,7 +287,11 @@ def _upload_entity_df(
             if _ENTITY_UPLOADING_CHUNK_SIZE <= 0
             else _ENTITY_UPLOADING_CHUNK_SIZE
         )
-        for batch in pa_table.to_batches(chunk_size):
+        pa_batches = pa_table.to_batches(chunk_size)
+        if len(pa_batches) > 1:
+            # fix this hive bug: https://issues.apache.org/jira/browse/HIVE-19316
+            cursor.execute(f"truncate table {table_name}")
+        for batch in pa_batches:
             chunk_data = []
             for i in range(len(batch)):
                 chunk_data.append(

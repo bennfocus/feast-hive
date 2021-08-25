@@ -8,9 +8,7 @@ from feast_hive import HiveSource
 # Read data from Hive table
 # Need make sure the table_ref exists and have data before continue.
 driver_hourly_stats = HiveSource(
-    host='localhost',
-    port=10000,
-    table_ref='example.driver_stats',
+    table='example.driver_stats',
     event_timestamp_column="datetime",
     created_timestamp_column="created",
 )

@@ -1,9 +1,12 @@
-DEFAULT_HIVE_HOST = "localhost"
-DEFAULT_HIVE_PORT = 10000
-DEFAULT_HIVE_AUTH_MECHANISM = "PLAIN"
+DEFAULT_HS2_HOST = "localhost"
+DEFAULT_HS2_PORT = 10000
 
 
 def pytest_addoption(parser):
     """Adds a new command line options to py.test"""
-    parser.addoption("--hive_host", default=DEFAULT_HIVE_HOST, help="Hive Host")
-    parser.addoption("--hive_port", default=DEFAULT_HIVE_PORT, help="Hive Port")
+    parser.addoption("--hs2_host", default=DEFAULT_HS2_HOST, help="HiveServer2 Host")
+    parser.addoption("--hs2_port", default=DEFAULT_HS2_PORT, help="HiveServer2 Port")
+    parser.addoption(
+        "--hive_table_prefix",
+        help="To use existed table without upload, for reducing test running time.",
+    )

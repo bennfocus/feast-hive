@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
 from feast.errors import DataSourceNotFoundException
+from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast_hive.type_map import hive_to_feast_value_type
 
 
@@ -11,24 +12,37 @@ class HiveOptions:
     DataSource Hive options used to source features from Hive
     """
 
-    def __init__(
-        self, table_ref: str,
-    ):
-        self._table_ref = table_ref
+    def __init__(self, table: Optional[str], query: Optional[str]):
+        self._table = table
+        self._query = query
 
     @property
-    def table_ref(self):
+    def query(self):
+        """
+        Returns the query referenced by this source
+        """
+        return self._query
+
+    @query.setter
+    def query(self, query):
+        """
+        Sets the query referenced by this source
+        """
+        self._query = query
+
+    @property
+    def table(self):
         """
         Returns the table ref of this data source
         """
-        return self._table_ref
+        return self._table
 
-    @table_ref.setter
-    def table_ref(self, table_ref):
+    @table.setter
+    def table(self, table):
         """
         Sets the table ref of this data source
         """
-        self._table_ref = table_ref
+        self._table = table
 
     @classmethod
     def from_proto(cls, hive_options_proto: Any):
@@ -58,26 +72,16 @@ class HiveOptions:
 class HiveSource(DataSource):
     def __init__(
         self,
-        table_ref: str,
+        table: Optional[str] = None,
+        query: Optional[str] = None,
         event_timestamp_column: Optional[str] = "",
         created_timestamp_column: Optional[str] = "",
         field_mapping: Optional[Dict[str, str]] = None,
         date_partition_column: Optional[str] = "",
     ):
-        """Connect to HiveServer2
-
-        :param table_ref: The table ref (table name or view name) in Hive.
-        :param event_timestamp_column:
-        :param created_timestamp_column:
-        :param field_mapping:
-        :param date_partition_column:
-        """
-
         assert (
-            table_ref is not None and table_ref != ""
-        ), '"table_ref" is required for HiveSource'
-
-        self._hive_options = HiveOptions(table_ref=table_ref)
+            table is not None or query is not None
+        ), '"table" or "query" is required for HiveSource.'
 
         super().__init__(
             event_timestamp_column,
@@ -86,17 +90,39 @@ class HiveSource(DataSource):
             date_partition_column,
         )
 
+        self._hive_options = HiveOptions(table=table, query=query)
+
+    @staticmethod
+    def from_proto(data_source: DataSourceProto):
+        return HiveSource(
+            field_mapping=dict(data_source.field_mapping),
+            table=data_source.custom_options.table,
+            event_timestamp_column=data_source.event_timestamp_column,
+            created_timestamp_column=data_source.created_timestamp_column,
+            date_partition_column=data_source.date_partition_column,
+            query=data_source.custom_options.query,
+        )
+
     def __eq__(self, other):
         if not isinstance(other, HiveSource):
             raise TypeError("Comparisons should only involve HiveSource class objects.")
 
         return (
-            self.hive_options.table_ref == other.hive_options.table_ref
+            self.hive_options.table == other.hive_options.table
+            and self.hive_options.query == other.hive_options.query
             and self.event_timestamp_column == other.event_timestamp_column
             and self.created_timestamp_column == other.created_timestamp_column
             and self.field_mapping == other.field_mapping
             and self.date_partition_column == other.date_partition_column
         )
+
+    @property
+    def table(self):
+        return self._hive_options.table
+
+    @property
+    def query(self):
+        return self._hive_options.query
 
     @property
     def hive_options(self):
@@ -112,29 +138,18 @@ class HiveSource(DataSource):
         """
         self._hive_options = hive_options
 
-    @property
-    def table_ref(self):
-        return self._hive_options.table_ref
-
-    def to_proto(self) -> None:
+    def to_proto(self) -> DataSourceProto:
         pass
 
     def validate(self, config: RepoConfig):
-        from feast_hive.offline_store import HiveOfflineStoreConfig
+        self.get_table_column_names_and_types(config)
 
-        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
-
-        from impala.dbapi import connect
-
-        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
-            cursor = conn.cursor()
-            table_ref_splits = self.table_ref.rsplit(".", 1)
-            if len(table_ref_splits) == 2:
-                cursor.execute(f"use {table_ref_splits[0]}")
-                table_ref_splits.pop(0)
-            cursor.execute(f'show tables like "{table_ref_splits[0]}"')
-            if not cursor.fetchone():
-                raise DataSourceNotFoundException(self.table_ref)
+    def get_table_query_string(self) -> str:
+        """Returns a string that can directly be used to reference this table in SQL"""
+        if self.table:
+            return f'"{self.table}"'
+        else:
+            return f"({self.query})"
 
     @staticmethod
     def source_datatype_to_feast_value_type() -> Callable[[str], ValueType]:
@@ -143,21 +158,25 @@ class HiveSource(DataSource):
     def get_table_column_names_and_types(
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
-        from feast_hive.offline_store import HiveOfflineStoreConfig
-
-        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
-
-        from impala.dbapi import connect
-
-        with connect(**config.offline_store.dict(exclude={"type"})) as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"desc {self.table_ref}")
-            name_type_pairs = []
-            for field in cursor.fetchall():
-                if field[0] == "":
-                    break
-                name_type_pairs.append(
-                    (field[0], str(field[1]).upper().split("<", 1)[0])
-                )
-
-            return name_type_pairs
+        pass
+        # from feast_hive.offline_store import _get_connection
+        #
+        # with _get_connection(config.offline_store) as conn:
+        #     with conn.cursor() as cursor:
+        #         if self.table is not None:
+        #
+        #             cursor.execute(f"desc {self.table}")
+        #             name_type_pairs = []
+        #             for field in cursor.fetchall():
+        #                 if field[0] == "":
+        #                     break
+        #                 name_type_pairs.append(
+        #                     (field[0], str(field[1]).upper().split("<", 1)[0])
+        #                 )
+        #
+        #             if not cursor.table_exists(self.table):
+        #                 raise DataSourceNotFoundException(self.table)
+        #         else:
+        #             cursor.execute(f"SELECT * FROM ({self.query}) LIMIT 1")
+        #             if not cursor.fetchone():
+        #                 raise DataSourceNotFoundException(self.query)
