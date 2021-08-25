@@ -4,9 +4,11 @@ Hive is not included in current [Feast](https://github.com/feast-dev/feast) road
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
 ## Important
-**This project is still being developed and not ready for using yet, I am going make a first workable release in a couple of days.**
+**This project is still being actively developed and not ready for using yet.**
 
-**currently only supports `multiple insert` for uploading entity_df, which will be a little unefficient, going to provider another choice for users who are able to provider WebHDFS** 
+Plan & Progress:
+- I am working on the first workable version, think it will be released in a couple of days.
+- Currently, it only supports `multiple insert` for uploading entity_df, which will be a little inefficient, I will provide some extra parameters for users who are able to provide WebHDFS address in next version. 
 
 ## Quickstart
 
