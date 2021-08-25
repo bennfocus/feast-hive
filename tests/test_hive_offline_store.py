@@ -24,7 +24,11 @@ from impala.interface import Connection
 from pandas._testing import assert_frame_equal
 from pytz import utc
 
-from feast_hive import offline_store, HiveOfflineStoreConfig, HiveSource
+from feast_hive import (
+    offline_store as feast_hive_offline_store,
+    HiveOfflineStoreConfig,
+    HiveSource,
+)
 import tests.driver_test_data as driver_data
 
 
@@ -56,7 +60,7 @@ def temporarily_upload_df_to_hive(
     conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
 ) -> Iterator[None]:
     try:
-        offline_store._upload_entity_df(conn, table_name, entity_df)
+        feast_hive_offline_store._upload_entity_df(conn, table_name, entity_df)
         yield
     except Exception as ex:
         raise
@@ -227,11 +231,9 @@ def test_historical_features_from_hive_sources(
     pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
     pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
     pt_opt_hive_table_prefix = pytestconfig.getoption("hive_table_prefix")
-    hive_offline_store_config = HiveOfflineStoreConfig(
-        host=pt_opt_hs2_host, port=pt_opt_hs2_port,
-    )
+    offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
 
-    conn = offline_store._get_connection(hive_offline_store_config)
+    conn = feast_hive_offline_store._get_connection(offline_store)
 
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (
@@ -469,5 +471,7 @@ def test_historical_features_from_hive_sources(
                 )
                 .reset_index(drop=True),
             )
+        except Exception as ex:
+            raise
         finally:
             store.teardown()
