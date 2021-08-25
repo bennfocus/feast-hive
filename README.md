@@ -3,7 +3,8 @@
 Hive is not included in current [Feast](https://github.com/feast-dev/feast) roadmap, this project intends to add Hive support for Offline Store.  
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
-**Important: This project is still being developed and not ready for using yet, I am going make a first workable release in a couple of days.**
+## Important
+**This project is still being developed and not ready for using yet, I am going make a first workable release in a couple of days.**
 
 **currently only supports `multiple insert` for uploading entity_df, which will be a little unefficient, going to provider another choice for users who are able to provider WebHDFS** 
 
