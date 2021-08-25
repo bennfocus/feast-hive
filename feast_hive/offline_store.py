@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 from pydantic import StrictBool, StrictInt, StrictStr
-from pydantic.typing import Literal
 
 from feast import FeatureView
 from feast.data_source import DataSource
@@ -22,7 +21,6 @@ try:
     from impala.dbapi import connect as impala_connect
     from impala.hiveserver2 import CBatch as ImpalaCBatch
     from impala.interface import Connection
-
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
 
@@ -32,7 +30,7 @@ except ImportError as e:
 class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store config for Hive """
 
-    type: Literal["hive"] = "hive"
+    type: StrictStr = "hive"
     """ Offline store type selector """
 
     host: StrictStr
@@ -70,6 +68,10 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
 
     http_path: StrictStr = ""
     """ Specify the path in the http URL. Used only when `use_http_transport` is True. """
+
+    kerberos_service_name: StrictStr = ""
+    """Authenticate to a particular `impalad` service principal. Uses
+        `'impala'` by default."""
 
 
 class HiveOfflineStore(OfflineStore):

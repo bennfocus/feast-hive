@@ -1,3 +1,4 @@
+import pickle
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from feast import RepoConfig, ValueType
@@ -45,7 +46,7 @@ class HiveOptions:
         self._table = table
 
     @classmethod
-    def from_proto(cls, hive_options_proto: Any):
+    def from_proto(cls, hive_options_proto: DataSourceProto.CustomSourceOptions):
         """
         Creates a HiveOptions from a protobuf representation of a hive option
 
@@ -55,18 +56,25 @@ class HiveOptions:
         Returns:
             Returns a HiveOptions object based on the hive_options protobuf
         """
+        hive_configuration = pickle.loads(hive_options_proto.configuration)
 
-        pass
+        hive_options = cls(
+            table=hive_configuration.table, query=hive_configuration.query
+        )
 
-    def to_proto(self) -> None:
+        return hive_options
+
+    def to_proto(self) -> DataSourceProto.CustomSourceOptions:
         """
         Converts an HiveOptionsProto object to its protobuf representation.
 
         Returns:
             HiveOptionsProto protobuf
         """
-
-        pass
+        hive_options_proto = DataSourceProto.CustomSourceOptions(
+            configuration=pickle.dumps(self)
+        )
+        return hive_options_proto
 
 
 class HiveSource(DataSource):
@@ -91,17 +99,6 @@ class HiveSource(DataSource):
         )
 
         self._hive_options = HiveOptions(table=table, query=query)
-
-    @staticmethod
-    def from_proto(data_source: DataSourceProto):
-        return HiveSource(
-            field_mapping=dict(data_source.field_mapping),
-            table=data_source.custom_options.table,
-            event_timestamp_column=data_source.event_timestamp_column,
-            created_timestamp_column=data_source.created_timestamp_column,
-            date_partition_column=data_source.date_partition_column,
-            query=data_source.custom_options.query,
-        )
 
     def __eq__(self, other):
         if not isinstance(other, HiveSource):
@@ -139,7 +136,32 @@ class HiveSource(DataSource):
         self._hive_options = hive_options
 
     def to_proto(self) -> DataSourceProto:
-        pass
+        data_source_proto = DataSourceProto(
+            type=DataSourceProto.CUSTOM_SOURCE,
+            field_mapping=self.field_mapping,
+            custom_options=self.hive_options.to_proto(),
+        )
+
+        data_source_proto.event_timestamp_column = self.event_timestamp_column
+        data_source_proto.created_timestamp_column = self.created_timestamp_column
+        data_source_proto.date_partition_column = self.date_partition_column
+        return data_source_proto
+
+    @staticmethod
+    def from_proto(data_source: DataSourceProto):
+
+        assert data_source.HasField("custom_options")
+
+        hive_options = HiveOptions.from_proto(data_source.custom_options)
+
+        return HiveSource(
+            field_mapping=dict(data_source.field_mapping),
+            table=hive_options.table,
+            query=hive_options.query,
+            event_timestamp_column=data_source.event_timestamp_column,
+            created_timestamp_column=data_source.created_timestamp_column,
+            date_partition_column=data_source.date_partition_column,
+        )
 
     def validate(self, config: RepoConfig):
         self.get_table_column_names_and_types(config)
