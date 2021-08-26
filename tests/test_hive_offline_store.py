@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from tempfile import TemporaryDirectory
 
 import pandas as pd
-from typing import Union, Iterator
+from typing import Union, Iterator, Tuple
 
 import pytest
 from assertpy import assertpy
@@ -216,6 +216,41 @@ def get_expected_training_df(
     return expected_df
 
 
+def get_conn_from_pytestconfig(pytestconfig,):
+    pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
+    pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
+    offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
+    conn = feast_hive_offline_store._get_connection(offline_store)
+    return offline_store, conn
+
+
+def test_upload_entity_df(pytestconfig):
+    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
+
+    start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
+    (_, _, _, orders_df, _,) = generate_entities(start_date, True)
+
+    target_table = (
+        f"test_upload_entity_df_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+    )
+
+    with temporarily_upload_df_to_hive(conn, target_table, orders_df):
+        orders_df_from_sql = feast_hive_offline_store.HiveRetrievalJob(
+            conn, f"SELECT * FROM {target_table}"
+        ).to_df()
+
+        assert sorted(orders_df.columns) == sorted(orders_df_from_sql.columns)
+        assert_frame_equal(
+            orders_df.sort_values(
+                by=["e_ts", "order_id", "driver_id", "customer_id"]
+            ).reset_index(drop=True),
+            orders_df_from_sql[orders_df.columns]
+            .sort_values(by=["e_ts", "order_id", "driver_id", "customer_id"])
+            .reset_index(drop=True),
+            check_dtype=False,
+        )
+
+
 @pytest.mark.parametrize(
     "provider_type", ["local"],
 )
@@ -228,13 +263,7 @@ def get_expected_training_df(
 def test_historical_features_from_hive_sources(
     provider_type, infer_event_timestamp_col, capsys, full_feature_names, pytestconfig
 ):
-    pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
-    pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
-    pt_opt_hive_table_prefix = pytestconfig.getoption("hive_table_prefix")
-    offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
-
-    conn = feast_hive_offline_store._get_connection(offline_store)
-
+    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (
         customer_entities,
@@ -244,6 +273,7 @@ def test_historical_features_from_hive_sources(
         start_date,
     ) = generate_entities(start_date, infer_event_timestamp_col)
 
+    pt_opt_hive_table_prefix = pytestconfig.getoption("hive_table_prefix")
     hive_table_prefix = (
         f"test_hist_retrieval_{int(time.time_ns())}_{random.randint(1000, 9999)}"
         if not pt_opt_hive_table_prefix

@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 from pydantic import StrictBool, StrictInt, StrictStr
+from pytz import utc
 
 from feast import FeatureView
 from feast.data_source import DataSource
@@ -161,6 +162,8 @@ class HiveOfflineStore(OfflineStore):
                     full_feature_names=full_feature_names,
                 )
 
+                # In order to use `REGEX Column Specification`, we need set up `hive.support.quoted.identifiers`.
+                # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
                 queries = ["SET hive.support.quoted.identifiers=None", query]
 
                 yield queries
@@ -283,11 +286,17 @@ def _upload_entity_df(
         def preprocess_value(raw_value, col_type):
             col_type = col_type.lower()
 
-            if col_type == "timestamp" and isinstance(raw_value, datetime):
-                raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
-                return f'"{raw_value}"'
+            if col_type == "timestamp":
+                if isinstance(raw_value, datetime):
+                    # Since Hive does not support timezone, need to transform to utc.
+                    if raw_value.tzinfo:
+                        raw_value = raw_value.astimezone(tz=utc)
+                    raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    return f'"{raw_value}"'
+                else:
+                    return f'"{raw_value}"'
 
-            if col_type in ["string", "timestamp", "date"]:
+            if col_type in ["string", "date"]:
                 return f'"{raw_value}"'
             else:
                 return str(raw_value)
