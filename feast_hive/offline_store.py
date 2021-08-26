@@ -129,7 +129,7 @@ class HiveOfflineStore(OfflineStore):
         conn = _get_connection(config.offline_store)
 
         @contextlib.contextmanager
-        def query_generator() -> Iterator[str]:
+        def query_generator() -> Iterator[List[str]]:
             table_name = offline_utils.get_temp_entity_table_name()
 
             try:
@@ -161,7 +161,9 @@ class HiveOfflineStore(OfflineStore):
                     full_feature_names=full_feature_names,
                 )
 
-                yield query
+                queries = ["SET hive.support.quoted.identifiers=None", query]
+
+                yield queries
 
             finally:
                 with conn.cursor() as cursor:
@@ -172,18 +174,25 @@ class HiveOfflineStore(OfflineStore):
 
 class HiveRetrievalJob(RetrievalJob):
     def __init__(
-        self, conn: Connection, query: Union[str, Callable[[], ContextManager[str]]],
+        self,
+        conn: Connection,
+        queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
     ):
-        if not isinstance(query, str):
-            self._query_generator = query
+        assert (
+            isinstance(queries, str) or isinstance(queries, list) or callable(queries)
+        )
+
+        if callable(queries):
+            self._queries_generator = queries
         else:
+            if isinstance(queries, str):
+                queries = [queries]
 
             @contextlib.contextmanager
-            def query_generator() -> Iterator[str]:
-                assert isinstance(query, str)
-                yield query
+            def query_generator() -> Iterator[List[str]]:
+                yield queries
 
-            self._query_generator = query_generator
+            self._queries_generator = query_generator
 
         self._conn = conn
 
@@ -191,9 +200,10 @@ class HiveRetrievalJob(RetrievalJob):
         return self.to_arrow().to_pandas()
 
     def to_arrow(self) -> pa.Table:
-        with self._query_generator() as query:
+        with self._queries_generator() as queries:
             with self._conn.cursor() as cursor:
-                cursor.execute(query)
+                for query in queries:
+                    cursor.execute(query)
                 batches = cursor.fetchcolumnar()
                 pa_batches = [
                     self._convert_hive_batch_to_arrow_batch(b) for b in batches
@@ -310,7 +320,17 @@ def _upload_entity_df(
             cursor.execute(entity_chunk_insert_sql)
 
 
-# This query is based on sdk/python/feast/infra/offline_stores/redshift.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
+# This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
+# There are couple of changes from BigQuery:
+# 1. Use "t - interval 'x' second" instead of "Timestamp_sub(...)"
+# 2. Replace `SELECT * EXCEPT (...)` with `REGEX Column Specification`, because `EXCEPT` is not supported by Hive.
+#    Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
+# 3. Change USING to ON
+# 4. Change ANY_VALUE() to MAX()
+# 5. Change subquery `SELECT MAX(entity_timestamp) FROM entity_dataframe` and `SELECT MIN(entity_timestamp) FROM
+#    entity_dataframe` to `join`.
+#    Since Hive does not support more than one subquery, and not supports subquery on non-top level.
+# We need to keep this query in sync with BigQuery.
 
 MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
 /*
@@ -323,9 +343,9 @@ WITH entity_dataframe AS (
         {% for featureview in featureviews %}
             ,CONCAT(
                 {% for entity in featureview.entities %}
-                    CAST({{entity}} AS VARCHAR),
+                    CAST({{entity}} AS STRING),
                 {% endfor %}
-                CAST({{entity_df_event_timestamp_col}} AS VARCHAR)
+                CAST({{entity_df_event_timestamp_col}} AS STRING)
             ) AS {{featureview.name}}__entity_row_unique_id
         {% endfor %}
     FROM {{ left_table_query_string }}
@@ -368,9 +388,16 @@ WITH entity_dataframe AS (
             {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
     FROM {{ featureview.table_subquery }}
-    WHERE {{ featureview.event_timestamp_column }} <= (SELECT MAX(entity_timestamp) FROM entity_dataframe)
+    LEFT JOIN (
+        SELECT MAX(entity_timestamp) as max_entity_timestamp
+               {% if featureview.ttl == 0 %}{% else %}
+               ,(MIN(entity_timestamp) - interval '{{ featureview.ttl }}' second) as min_entity_timestamp
+               {% endif %}
+        FROM entity_dataframe
+    ) as temp
+    WHERE {{ featureview.event_timestamp_column }} <= max_entity_timestamp
     {% if featureview.ttl == 0 %}{% else %}
-    AND {{ featureview.event_timestamp_column }} >= (SELECT MIN(entity_timestamp) FROM entity_dataframe) - {{ featureview.ttl }} * interval '1' second
+    AND {{ featureview.event_timestamp_column }} >=  min_entity_timestamp
     {% endif %}
 ),
 
@@ -381,16 +408,17 @@ WITH entity_dataframe AS (
         entity_dataframe.{{featureview.name}}__entity_row_unique_id
     FROM {{ featureview.name }}__subquery AS subquery
     INNER JOIN {{ featureview.name }}__entity_dataframe AS entity_dataframe
-    ON TRUE
-        AND subquery.event_timestamp <= entity_dataframe.entity_timestamp
+    ON ( 
+        subquery.event_timestamp <= entity_dataframe.entity_timestamp
 
         {% if featureview.ttl == 0 %}{% else %}
-        AND subquery.event_timestamp >= entity_dataframe.entity_timestamp - {{ featureview.ttl }} * interval '1' second
+        AND subquery.event_timestamp >= entity_dataframe.entity_timestamp - interval '{{ featureview.ttl }}' second
         {% endif %}
 
         {% for entity in featureview.entities %}
         AND subquery.{{ entity }} = entity_dataframe.{{ entity }}
         {% endfor %}
+    )
 ),
 
 /*
@@ -416,19 +444,23 @@ WITH entity_dataframe AS (
 */
 {{ featureview.name }}__latest AS (
     SELECT
-        {{featureview.name}}__entity_row_unique_id,
-        MAX(event_timestamp) AS event_timestamp
+        base.{{featureview.name}}__entity_row_unique_id,
+        MAX(base.event_timestamp) AS event_timestamp
         {% if featureview.created_timestamp_column %}
-            ,ANY_VALUE(created_timestamp) AS created_timestamp
+            ,MAX(base.created_timestamp) AS created_timestamp
         {% endif %}
 
-    FROM {{ featureview.name }}__base
+    FROM {{ featureview.name }}__base AS base
     {% if featureview.created_timestamp_column %}
-        INNER JOIN {{ featureview.name }}__dedup
-        USING ({{featureview.name}}__entity_row_unique_id, event_timestamp, created_timestamp)
+        INNER JOIN {{ featureview.name }}__dedup AS dedup
+        ON (
+            dedup.{{featureview.name}}__entity_row_unique_id=base.{{featureview.name}}__entity_row_unique_id
+            AND dedup.event_timestamp=base.event_timestamp
+            AND dedup.created_timestamp=base.created_timestamp
+        )
     {% endif %}
 
-    GROUP BY {{featureview.name}}__entity_row_unique_id
+    GROUP BY base.{{featureview.name}}__entity_row_unique_id
 ),
 
 /*
@@ -437,13 +469,13 @@ WITH entity_dataframe AS (
 */
 {{ featureview.name }}__cleaned AS (
     SELECT base.*
-    FROM {{ featureview.name }}__base as base
-    INNER JOIN {{ featureview.name }}__latest
-    USING(
-        {{featureview.name}}__entity_row_unique_id,
-        event_timestamp
+    FROM {{ featureview.name }}__base AS base
+    INNER JOIN {{ featureview.name }}__latest AS latest
+    ON (
+        base.{{featureview.name}}__entity_row_unique_id=latest.{{featureview.name}}__entity_row_unique_id
+        AND base.event_timestamp=latest.event_timestamp
         {% if featureview.created_timestamp_column %}
-            ,created_timestamp
+            AND base.created_timestamp=latest.created_timestamp
         {% endif %}
     )
 ){% if loop.last %}{% else %}, {% endif %}
@@ -455,7 +487,7 @@ WITH entity_dataframe AS (
  The entity_dataframe dataset being our source of truth here.
  */
 
-SELECT *
+SELECT `(entity_timestamp|{% for featureview in featureviews %}{{featureview.name}}__entity_row_unique_id{% if loop.last %}{% else %}|{% endif %}{% endfor %})?+.+`
 FROM entity_dataframe
 {% for featureview in featureviews %}
 LEFT JOIN (
@@ -465,6 +497,9 @@ LEFT JOIN (
             ,{% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}
         {% endfor %}
     FROM {{ featureview.name }}__cleaned
-) USING ({{featureview.name}}__entity_row_unique_id)
+) AS {{ featureview.name }}__joined 
+ON (
+    {{ featureview.name }}__joined.{{featureview.name}}__entity_row_unique_id=entity_dataframe.{{featureview.name}}__entity_row_unique_id
+)
 {% endfor %}
 """

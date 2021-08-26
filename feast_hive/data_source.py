@@ -169,7 +169,7 @@ class HiveSource(DataSource):
     def get_table_query_string(self) -> str:
         """Returns a string that can directly be used to reference this table in SQL"""
         if self.table:
-            return f'"{self.table}"'
+            return f"`{self.table}`"
         else:
             return f"({self.query})"
 
