@@ -1,11 +1,10 @@
 import pickle
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
-from feast.errors import DataSourceNotFoundException
 from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
-from feast_hive.type_map import hive_to_feast_value_type
+from feast_hive.hive_type_map import hive_to_feast_value_type
 
 
 class HiveOptions:

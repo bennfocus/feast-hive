@@ -25,7 +25,7 @@ from pandas._testing import assert_frame_equal
 from pytz import utc
 
 from feast_hive import (
-    offline_store as feast_hive_offline_store,
+    hive as feast_hive_module,
     HiveOfflineStoreConfig,
     HiveSource,
 )
@@ -60,7 +60,7 @@ def temporarily_upload_df_to_hive(
     conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
 ) -> Iterator[None]:
     try:
-        feast_hive_offline_store._upload_entity_df(conn, table_name, entity_df)
+        feast_hive_module._upload_entity_df(conn, table_name, entity_df)
         yield
     except Exception as ex:
         raise
@@ -220,7 +220,7 @@ def get_conn_from_pytestconfig(pytestconfig,):
     pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
     pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
     offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
-    conn = feast_hive_offline_store._get_connection(offline_store)
+    conn = feast_hive_module._get_connection(offline_store)
     return offline_store, conn
 
 
@@ -235,7 +235,7 @@ def test_upload_entity_df(pytestconfig):
     )
 
     with temporarily_upload_df_to_hive(conn, target_table, orders_df):
-        orders_df_from_sql = feast_hive_offline_store.HiveRetrievalJob(
+        orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
             conn, f"SELECT * FROM {target_table}"
         ).to_df()
 

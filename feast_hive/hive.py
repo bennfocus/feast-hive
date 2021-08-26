@@ -15,8 +15,8 @@ from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
-from feast_hive.data_source import HiveSource
-from feast_hive.type_map import hive_to_pa_value_type, pa_to_hive_value_type
+from feast_hive.hive_source import HiveSource
+from feast_hive.hive_type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
 try:
     from impala.dbapi import connect as impala_connect
