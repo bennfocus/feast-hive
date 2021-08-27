@@ -107,11 +107,11 @@ class HiveOfflineStore(OfflineStore):
                 SELECT {field_string}
                 FROM (
                     SELECT {field_string},
-                    ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS _feast_row
+                    ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
                     FROM {from_expression} t1
                     WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
                 ) t2
-                WHERE _feast_row = 1
+                WHERE feast_row_ = 1
                 """
 
         return HiveRetrievalJob(_get_connection(config.offline_store), query)
