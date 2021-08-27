@@ -27,7 +27,7 @@ from feast_hive import (
     HiveOfflineStoreConfig,
     HiveSource,
 )
-from tests import feast_funcs
+from tests import feast_tests_funcs
 
 
 @contextlib.contextmanager
@@ -49,19 +49,62 @@ def temporarily_upload_df_to_hive(
             cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def get_conn_from_pytestconfig(pytestconfig,):
+def get_info_from_pytestconfig(pytestconfig):
     pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
     pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
     offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
     conn = feast_hive_module._get_connection(offline_store)
-    return offline_store, conn
+    return offline_store, conn, pt_opt_hs2_host, pt_opt_hs2_port
+
+
+def test_hive_source(pytestconfig):
+    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
+
+    df = pd.DataFrame(
+        {
+            "a": [1.0, np.nan, 0.11122123123, 0.331412414132123123131231],
+            "b": np.array([3] * 4, dtype="int32"),
+            "c": ["foo", "oof", "ofo", None],
+            "d": pd.date_range("2021-08-27", periods=4),
+        }
+    )
+    table_name = f"test_hive_source_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+    expected_schema = [
+        ("a", "DOUBLE"),
+        ("b", "INT"),
+        ("c", "STRING"),
+        ("d", "TIMESTAMP"),
+    ]
+
+    with temporarily_upload_df_to_hive(
+        conn, table_name, df
+    ), TemporaryDirectory() as temp_dir:
+        config = RepoConfig(
+            registry=os.path.join(temp_dir, "registry.db"),
+            project="default",
+            provider="local",
+            online_store=SqliteOnlineStoreConfig(
+                path=os.path.join(temp_dir, "online_store.db"),
+            ),
+            offline_store=offline_store,
+        )
+
+        # Test with table
+        hive_source_table = HiveSource(table=table_name)
+        schema1 = hive_source_table.get_table_column_names_and_types(config)
+        assert expected_schema == schema1
+
+        # Test with query
+        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100")
+        schema2 = hive_source_table.get_table_column_names_and_types(config)
+        assert expected_schema == schema2
 
 
 def test_upload_entity_df(pytestconfig):
-    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
+    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
 
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
-    (_, _, _, orders_df, _,) = feast_funcs.generate_entities(start_date, True)
+    (_, _, _, orders_df, _,) = feast_tests_funcs.generate_entities(start_date, True)
     orders_table = f"test_upload_entity_df_orders_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, orders_table, orders_df):
         orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
@@ -81,7 +124,7 @@ def test_upload_entity_df(pytestconfig):
 
 
 def test_upload_abnormal_df(pytestconfig):
-    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
+    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
 
     df1 = pd.DataFrame(
         {
@@ -117,15 +160,15 @@ def test_upload_abnormal_df(pytestconfig):
     "provider_type", ["local"],
 )
 @pytest.mark.parametrize(
-    "infer_event_timestamp_col", [True],
+    "infer_event_timestamp_col", [False, True],
 )
 @pytest.mark.parametrize(
-    "full_feature_names", [True],
+    "full_feature_names", [False, True],
 )
 def test_historical_features_from_hive_sources(
     provider_type, infer_event_timestamp_col, capsys, full_feature_names, pytestconfig
 ):
-    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
+    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (
         customer_entities,
@@ -133,7 +176,7 @@ def test_historical_features_from_hive_sources(
         end_date,
         orders_df,
         start_date,
-    ) = feast_funcs.generate_entities(start_date, infer_event_timestamp_col)
+    ) = feast_tests_funcs.generate_entities(start_date, infer_event_timestamp_col)
 
     pt_opt_hive_table_prefix = pytestconfig.getoption("hive_table_prefix")
     hive_table_prefix = (
@@ -152,7 +195,7 @@ def test_historical_features_from_hive_sources(
     )
 
     # Stage driver_df to Hive
-    driver_df = feast_funcs.create_driver_hourly_stats_df(
+    driver_df = feast_tests_funcs.create_driver_hourly_stats_df(
         driver_entities, start_date, end_date
     )
     driver_table_name = f"{hive_table_prefix}_driver_hourly"
@@ -163,7 +206,7 @@ def test_historical_features_from_hive_sources(
     )
 
     # Stage customer_df to Redshift
-    customer_df = feast_funcs.create_customer_daily_profile_df(
+    customer_df = feast_tests_funcs.create_customer_daily_profile_df(
         customer_entities, start_date, end_date
     )
     customer_table_name = f"{hive_table_prefix}_customer_profile"
@@ -179,14 +222,16 @@ def test_historical_features_from_hive_sources(
             event_timestamp_column="event_timestamp",
             created_timestamp_column="created",
         )
-        driver_fv = feast_funcs.create_driver_hourly_stats_feature_view(driver_source)
+        driver_fv = feast_tests_funcs.create_driver_hourly_stats_feature_view(
+            driver_source
+        )
 
         customer_source = HiveSource(
             table=customer_table_name,
             event_timestamp_column="event_timestamp",
             created_timestamp_column="created",
         )
-        customer_fv = feast_funcs.create_customer_daily_profile_feature_view(
+        customer_fv = feast_tests_funcs.create_customer_daily_profile_feature_view(
             customer_source
         )
 
@@ -212,12 +257,12 @@ def test_historical_features_from_hive_sources(
 
         try:
             event_timestamp = (
-                feast_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
-                if feast_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
+                feast_tests_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
+                if feast_tests_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
                 in orders_df.columns
                 else "e_ts"
             )
-            expected_df = feast_funcs.get_expected_training_df(
+            expected_df = feast_tests_funcs.get_expected_training_df(
                 customer_df,
                 customer_fv,
                 driver_df,
@@ -279,7 +324,7 @@ def test_historical_features_from_hive_sources(
             timestamp_column = (
                 "e_ts"
                 if infer_event_timestamp_col
-                else feast_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
+                else feast_tests_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
             )
 
             entity_df_query_with_invalid_join_key = (

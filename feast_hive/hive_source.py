@@ -3,6 +3,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
+from feast.errors import DataSourceNotFoundException
 from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast_hive.hive_type_map import hive_to_feast_value_type
 
@@ -179,25 +180,25 @@ class HiveSource(DataSource):
     def get_table_column_names_and_types(
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
-        pass
-        # from feast_hive.offline_store import _get_connection
-        #
-        # with _get_connection(config.offline_store) as conn:
-        #     with conn.cursor() as cursor:
-        #         if self.table is not None:
-        #
-        #             cursor.execute(f"desc {self.table}")
-        #             name_type_pairs = []
-        #             for field in cursor.fetchall():
-        #                 if field[0] == "":
-        #                     break
-        #                 name_type_pairs.append(
-        #                     (field[0], str(field[1]).upper().split("<", 1)[0])
-        #                 )
-        #
-        #             if not cursor.table_exists(self.table):
-        #                 raise DataSourceNotFoundException(self.table)
-        #         else:
-        #             cursor.execute(f"SELECT * FROM ({self.query}) LIMIT 1")
-        #             if not cursor.fetchone():
-        #                 raise DataSourceNotFoundException(self.query)
+        from feast_hive.hive import _get_connection
+
+        with _get_connection(config.offline_store) as conn:
+            with conn.cursor() as cursor:
+                if self.table is not None:
+                    table_splits = self.table.rsplit(".", 1)
+                    database_name = table_splits[0] if len(table_splits) == 2 else None
+                    table_name = (
+                        table_splits[1] if len(table_splits) == 2 else table_splits[0]
+                    )
+
+                    try:
+                        return cursor.get_table_schema(table_name, database_name)
+                    except:
+                        raise DataSourceNotFoundException(self.table)
+
+                else:
+                    cursor.execute(f"SELECT * FROM ({self.query}) AS t LIMIT 1")
+                    if not cursor.fetchone():
+                        raise DataSourceNotFoundException(self.query)
+
+                    return [(field[0], field[1]) for field in cursor.description]
