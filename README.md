@@ -125,5 +125,5 @@ makr lint
 
 ```shell
 pip install -e .[test]
-pytest --hs2_host=localhost --hs2_port=10000
+pytest -n 6 --host=localhost --port=10000
 ```

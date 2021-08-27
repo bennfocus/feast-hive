@@ -206,7 +206,7 @@ def generate_entities(date, infer_event_timestamp_col, order_count: int = 1000):
     after_end_date = end_date + timedelta(days=365)
     customer_entities = list(range(1001, 1110))
     driver_entities = list(range(5001, 5110))
-    orders_df = driver_data.create_orders_df(
+    orders_df = create_orders_df(
         customers=customer_entities,
         drivers=driver_entities,
         start_date=before_start_date,

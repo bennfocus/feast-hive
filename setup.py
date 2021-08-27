@@ -10,10 +10,10 @@ with open("LICENSE") as f:
 
 INSTALL_REQUIRE = [
     "feast>=0.12.0",
-    "impyla==0.17.0",
+    "impyla[kerberos]>=0.15.0",
 ]
 
-TEST_REQUIRE = ["pytest==6.0.0", "assertpy==1.1"]
+TEST_REQUIRE = ["pytest==6.0.0", "pytest-xdist", "assertpy==1.1"]
 
 DEV_REQUIRE = [
     "flake8",

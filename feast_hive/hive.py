@@ -36,23 +36,23 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store type selector """
 
     host: StrictStr
-    """ The hostname for HiveServer2 """
+    """ Host name of the HiveServer2 """
 
     port: StrictInt = 10000
-    """ The port number for HiveServer2 (default is 10000) """
+    """ Port number of HiveServer2 (default is 10000) """
+
+    database: StrictStr = "default"
+    """ Default database when obtaining new cursors """
+
+    timeout: StrictInt = 45
+    """ Connection timeout in seconds when communicating with HiveServer2 """
 
     entity_uploading_chunk_size: StrictInt = 10000
     """ The chunk size of multiple insert when uploading entity_df to Hive,
         tuning this may affect the performance of get_historical_features """
 
-    database: Optional[StrictStr] = None
-    """ The default database. If `None`, the result is implementation-dependent """
-
-    timeout: Optional[StrictInt] = None
-    """ Connection timeout in seconds. Default is no timeout """
-
     use_ssl: StrictBool = False
-    """ Enable SSL """
+    """ Use SSL when connecting to HiveServer2 """
 
     ca_cert: Optional[StrictStr] = None
     """ Local path to the the third-party CA certificate. If SSL is enabled but
@@ -60,24 +60,19 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
         validated. """
 
     auth_mechanism: StrictStr = "PLAIN"
-    """ Specify the authentication mechanism. `'PLAIN'` for unsecured, `'GSSAPI'` for Kerberos and `'LDAP'` for Kerberos with
-        LDAP. """
+    """ {'NOSASL', 'PLAIN' <- default, 'GSSAPI', 'LDAP'}.
+        Use PLAIN for non-secured Hive clusters.  Use NOSASL for 
+        non-secured Impala connections.  Use LDAP for LDAP authenticated
+        connections.  Use GSSAPI for Kerberos-secured clusters. """
 
     user: Optional[StrictStr] = None
-    """ LDAP user, if applicable. """
+    """ LDAP user to authenticate """
 
     password: Optional[StrictStr] = None
-    """ LDAP password, if applicable. """
+    """ LDAP password to authenticate """
 
-    use_http_transport: StrictBool = False
-    """ Set it to True to use http transport of False to use binary transport. """
-
-    http_path: StrictStr = ""
-    """ Specify the path in the http URL. Used only when `use_http_transport` is True. """
-
-    kerberos_service_name: StrictStr = ""
-    """Authenticate to a particular `impalad` service principal. Uses
-        `'impala'` by default."""
+    kerberos_service_name: StrictStr = "impala"
+    """ Specify particular impalad service principal. """
 
 
 class HiveOfflineStore(OfflineStore):
@@ -281,7 +276,7 @@ def _upload_entity_df_by_insert(
     conn: Connection,
     table_name: str,
     entity_df: Union[pd.DataFrame, str],
-    chunk_size: None,
+    chunk_size: int = None,
 ) -> None:
     """Uploads a Pandas DataFrame to Hive by data insert"""
     entity_df.reset_index(drop=True, inplace=True)

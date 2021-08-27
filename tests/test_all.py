@@ -50,11 +50,11 @@ def temporarily_upload_df_to_hive(
 
 
 def get_info_from_pytestconfig(pytestconfig):
-    pt_opt_hs2_host = pytestconfig.getoption("hs2_host")
-    pt_opt_hs2_port = int(pytestconfig.getoption("hs2_port"))
-    offline_store = HiveOfflineStoreConfig(host=pt_opt_hs2_host, port=pt_opt_hs2_port,)
+    pt_opt_host = pytestconfig.getoption("host")
+    pt_opt_port = int(pytestconfig.getoption("port"))
+    offline_store = HiveOfflineStoreConfig(host=pt_opt_host, port=pt_opt_port,)
     conn = feast_hive_module._get_connection(offline_store)
-    return offline_store, conn, pt_opt_hs2_host, pt_opt_hs2_port
+    return offline_store, conn, pt_opt_host, pt_opt_port
 
 
 def test_hive_source(pytestconfig):
@@ -178,42 +178,29 @@ def test_historical_features_from_hive_sources(
         start_date,
     ) = feast_tests_funcs.generate_entities(start_date, infer_event_timestamp_col)
 
-    pt_opt_hive_table_prefix = pytestconfig.getoption("hive_table_prefix")
     hive_table_prefix = (
         f"test_hist_retrieval_{int(time.time_ns())}_{random.randint(1000, 9999)}"
-        if not pt_opt_hive_table_prefix
-        else pt_opt_hive_table_prefix
     )
 
     # Stage orders_df to Hive
     orders_table_name = f"{hive_table_prefix}_orders"
     entity_df_query = f"SELECT * FROM {orders_table_name}"
-    orders_context = (
-        temporarily_upload_df_to_hive(conn, orders_table_name, orders_df)
-        if not pt_opt_hive_table_prefix
-        else fake_upload_df_to_hive()
-    )
+    orders_context = temporarily_upload_df_to_hive(conn, orders_table_name, orders_df)
 
     # Stage driver_df to Hive
     driver_df = feast_tests_funcs.create_driver_hourly_stats_df(
         driver_entities, start_date, end_date
     )
     driver_table_name = f"{hive_table_prefix}_driver_hourly"
-    driver_context = (
-        temporarily_upload_df_to_hive(conn, driver_table_name, driver_df)
-        if not pt_opt_hive_table_prefix
-        else fake_upload_df_to_hive()
-    )
+    driver_context = temporarily_upload_df_to_hive(conn, driver_table_name, driver_df)
 
     # Stage customer_df to Redshift
     customer_df = feast_tests_funcs.create_customer_daily_profile_df(
         customer_entities, start_date, end_date
     )
     customer_table_name = f"{hive_table_prefix}_customer_profile"
-    customer_context = (
-        temporarily_upload_df_to_hive(conn, customer_table_name, customer_df)
-        if not pt_opt_hive_table_prefix
-        else fake_upload_df_to_hive()
+    customer_context = temporarily_upload_df_to_hive(
+        conn, customer_table_name, customer_df
     )
 
     with orders_context, driver_context, customer_context, TemporaryDirectory() as temp_dir:
