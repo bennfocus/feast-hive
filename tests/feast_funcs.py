@@ -1,7 +1,9 @@
+from datetime import timedelta, datetime
 from enum import Enum
 
 import numpy as np
 import pandas as pd
+from feast import FeatureView, Feature, ValueType
 from pytz import FixedOffset, timezone, utc
 
 DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL = "event_timestamp"
@@ -195,3 +197,168 @@ def create_customer_daily_profile_df(customers, start_date, end_date) -> pd.Data
     # TODO: Remove created timestamp in order to test whether its really optional
     df_all_customers["created"] = pd.to_datetime(pd.Timestamp.now(tz=None).round("ms"))
     return df_all_customers
+
+
+def generate_entities(date, infer_event_timestamp_col, order_count: int = 1000):
+    end_date = date
+    before_start_date = end_date - timedelta(days=365)
+    start_date = end_date - timedelta(days=7)
+    after_end_date = end_date + timedelta(days=365)
+    customer_entities = list(range(1001, 1110))
+    driver_entities = list(range(5001, 5110))
+    orders_df = driver_data.create_orders_df(
+        customers=customer_entities,
+        drivers=driver_entities,
+        start_date=before_start_date,
+        end_date=after_end_date,
+        order_count=order_count,
+        infer_event_timestamp_col=infer_event_timestamp_col,
+    )
+    return customer_entities, driver_entities, end_date, orders_df, start_date
+
+
+def create_driver_hourly_stats_feature_view(source):
+    driver_stats_feature_view = FeatureView(
+        name="driver_stats",
+        entities=["driver"],
+        features=[
+            Feature(name="conv_rate", dtype=ValueType.FLOAT),
+            Feature(name="acc_rate", dtype=ValueType.FLOAT),
+            Feature(name="avg_daily_trips", dtype=ValueType.INT32),
+        ],
+        batch_source=source,
+        ttl=timedelta(hours=2),
+    )
+    return driver_stats_feature_view
+
+
+def create_customer_daily_profile_feature_view(source):
+    customer_profile_feature_view = FeatureView(
+        name="customer_profile",
+        entities=["customer_id"],
+        features=[
+            Feature(name="current_balance", dtype=ValueType.FLOAT),
+            Feature(name="avg_passenger_count", dtype=ValueType.FLOAT),
+            Feature(name="lifetime_trip_count", dtype=ValueType.INT32),
+            Feature(name="avg_daily_trips", dtype=ValueType.INT32),
+        ],
+        batch_source=source,
+        ttl=timedelta(days=2),
+    )
+    return customer_profile_feature_view
+
+
+def make_tzaware(t: datetime) -> datetime:
+    """ We assume tz-naive datetimes are UTC """
+    if t.tzinfo is None:
+        return t.replace(tzinfo=utc)
+    else:
+        return t
+
+
+# Find the latest record in the given time range and filter
+def find_asof_record(records, ts_key, ts_start, ts_end, filter_key, filter_value):
+    found_record = {}
+    for record in records:
+        if record[filter_key] == filter_value and ts_start <= record[ts_key] <= ts_end:
+            if not found_record or found_record[ts_key] < record[ts_key]:
+                found_record = record
+    return found_record
+
+
+# Converts the given column of the pandas records to UTC timestamps
+def convert_timestamp_records_to_utc(records, column):
+    for record in records:
+        record[column] = make_tzaware(record[column]).astimezone(utc)
+    return records
+
+
+def get_expected_training_df(
+    customer_df: pd.DataFrame,
+    customer_fv: FeatureView,
+    driver_df: pd.DataFrame,
+    driver_fv: FeatureView,
+    orders_df: pd.DataFrame,
+    event_timestamp: str,
+    full_feature_names: bool = False,
+):
+    # Convert all pandas dataframes into records with UTC timestamps
+    order_records = convert_timestamp_records_to_utc(
+        orders_df.to_dict("records"), event_timestamp
+    )
+    driver_records = convert_timestamp_records_to_utc(
+        driver_df.to_dict("records"), driver_fv.batch_source.event_timestamp_column
+    )
+    customer_records = convert_timestamp_records_to_utc(
+        customer_df.to_dict("records"), customer_fv.batch_source.event_timestamp_column
+    )
+
+    # Manually do point-in-time join of orders to drivers and customers records
+    for order_record in order_records:
+        driver_record = find_asof_record(
+            driver_records,
+            ts_key=driver_fv.batch_source.event_timestamp_column,
+            ts_start=order_record[event_timestamp] - driver_fv.ttl,
+            ts_end=order_record[event_timestamp],
+            filter_key="driver_id",
+            filter_value=order_record["driver_id"],
+        )
+        customer_record = find_asof_record(
+            customer_records,
+            ts_key=customer_fv.batch_source.event_timestamp_column,
+            ts_start=order_record[event_timestamp] - customer_fv.ttl,
+            ts_end=order_record[event_timestamp],
+            filter_key="customer_id",
+            filter_value=order_record["customer_id"],
+        )
+
+        order_record.update(
+            {
+                (f"driver_stats__{k}" if full_feature_names else k): driver_record.get(
+                    k, None
+                )
+                for k in ("conv_rate", "avg_daily_trips")
+            }
+        )
+
+        order_record.update(
+            {
+                (
+                    f"customer_profile__{k}" if full_feature_names else k
+                ): customer_record.get(k, None)
+                for k in (
+                    "current_balance",
+                    "avg_passenger_count",
+                    "lifetime_trip_count",
+                )
+            }
+        )
+
+    # Convert records back to pandas dataframe
+    expected_df = pd.DataFrame(order_records)
+
+    # Move "event_timestamp" column to front
+    current_cols = expected_df.columns.tolist()
+    current_cols.remove(event_timestamp)
+    expected_df = expected_df[[event_timestamp] + current_cols]
+
+    # Cast some columns to expected types, since we lose information when converting pandas DFs into Python objects.
+    if full_feature_names:
+        expected_column_types = {
+            "order_is_success": "int32",
+            "driver_stats__conv_rate": "float32",
+            "customer_profile__current_balance": "float32",
+            "customer_profile__avg_passenger_count": "float32",
+        }
+    else:
+        expected_column_types = {
+            "order_is_success": "int32",
+            "conv_rate": "float32",
+            "current_balance": "float32",
+            "avg_passenger_count": "float32",
+        }
+
+    for col, typ in expected_column_types.items():
+        expected_df[col] = expected_df[col].astype(typ)
+
+    return expected_df
