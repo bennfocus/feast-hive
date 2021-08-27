@@ -41,6 +41,10 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     port: StrictInt = 10000
     """ The port number for HiveServer2 (default is 10000) """
 
+    entity_uploading_chunk_size: StrictInt = 10000
+    """ The chunk size of multiple insert when uploading entity_df to Hive,
+        tuning this may affect the performance of get_historical_features """
+
     database: Optional[StrictStr] = None
     """ The default database. If `None`, the result is implementation-dependent """
 
@@ -241,14 +245,24 @@ class HiveRetrievalJob(RetrievalJob):
 
 def _get_connection(store_config: HiveOfflineStoreConfig) -> Connection:
     assert isinstance(store_config, HiveOfflineStoreConfig)
-    return impala_connect(**store_config.dict(exclude={"type"}))
+    return impala_connect(
+        **store_config.dict(exclude={"type", "entity_uploading_chunk_size"})
+    )
 
 
 def _upload_entity_df_and_get_entity_schema(
-    conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
+    config: RepoConfig,
+    conn: Connection,
+    table_name: str,
+    entity_df: Union[pd.DataFrame, str],
 ) -> Dict[str, np.dtype]:
     if isinstance(entity_df, pd.DataFrame):
-        _upload_entity_df(conn, table_name, entity_df)
+        _upload_entity_df_by_insert(
+            conn,
+            table_name,
+            entity_df,
+            config.offline_store.entity_uploading_chunk_size,
+        )
         return dict(zip(entity_df.columns, entity_df.dtypes))
     elif isinstance(entity_df, str):
         with conn.cursor() as cursor:
@@ -256,26 +270,20 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} AS t LIMIT 1"
+            conn, f"SELECT * FROM {table_name} LIMIT 1"
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
         raise InvalidEntityType(type(entity_df))
 
 
-# Size of each chunk when upload entity_df to Hive
-_ENTITY_UPLOADING_CHUNK_SIZE = 10000
-
-
-def _upload_entity_df(
-    conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
+def _upload_entity_df_by_insert(
+    conn: Connection,
+    table_name: str,
+    entity_df: Union[pd.DataFrame, str],
+    chunk_size: None,
 ) -> None:
-    """Uploads a Pandas DataFrame to Hive as a temporary table (only exists in current session).
-
-    It uses multiple row insert method to upload the Dataframe to Hive, in order to reduce the complexity.
-    In future if we got performance issue, can consider to transform to a parquet file and upload to HDFS first.
-
-    """
+    """Uploads a Pandas DataFrame to Hive by data insert"""
     entity_df.reset_index(drop=True, inplace=True)
 
     pa_table = pa.Table.from_pandas(entity_df)
@@ -319,11 +327,7 @@ def _upload_entity_df(
 
         # Upload entity_df to the Hive table by multiple rows insert method
         entity_count = len(pa_table)
-        chunk_size = (
-            entity_count
-            if _ENTITY_UPLOADING_CHUNK_SIZE <= 0
-            else _ENTITY_UPLOADING_CHUNK_SIZE
-        )
+        chunk_size = entity_count if chunk_size is None else chunk_size
         pa_batches = pa_table.to_batches(chunk_size)
         if len(pa_batches) > 1:
             # fix this hive bug: https://issues.apache.org/jira/browse/HIVE-19316

@@ -40,7 +40,7 @@ def temporarily_upload_df_to_hive(
     conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
 ) -> Iterator[None]:
     try:
-        feast_hive_module._upload_entity_df(conn, table_name, entity_df)
+        feast_hive_module._upload_entity_df_by_insert(conn, table_name, entity_df)
         yield
     except Exception as ex:
         raise
