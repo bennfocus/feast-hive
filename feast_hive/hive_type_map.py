@@ -40,6 +40,9 @@ def pa_to_hive_value_type(pa_type_as_str: str) -> str:
     if pa_type_as_str.startswith("decimal"):
         return pa_type_as_str
 
+    if pa_type_as_str.startswith("dictionary<values=string,"):
+        return "string"
+
     type_map = {
         "null": "null",
         "bool": "boolean",

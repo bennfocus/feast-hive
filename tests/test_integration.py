@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from tempfile import TemporaryDirectory
 
 import pandas as pd
+import numpy as np
 from typing import Union, Iterator, Tuple
 
 import pytest
@@ -229,14 +230,10 @@ def test_upload_entity_df(pytestconfig):
 
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (_, _, _, orders_df, _,) = generate_entities(start_date, True)
-
-    target_table = (
-        f"test_upload_entity_df_{int(time.time_ns())}_{random.randint(1000, 9999)}"
-    )
-
-    with temporarily_upload_df_to_hive(conn, target_table, orders_df):
+    orders_table = f"test_upload_entity_df_orders_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+    with temporarily_upload_df_to_hive(conn, orders_table, orders_df):
         orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {target_table}"
+            conn, f"SELECT * FROM {orders_table}"
         ).to_df()
 
         assert sorted(orders_df.columns) == sorted(orders_df_from_sql.columns)
@@ -248,6 +245,39 @@ def test_upload_entity_df(pytestconfig):
             .sort_values(by=["e_ts", "order_id", "driver_id", "customer_id"])
             .reset_index(drop=True),
             check_dtype=False,
+        )
+
+
+def test_upload_abnormal_df(pytestconfig):
+    offline_store, conn = get_conn_from_pytestconfig(pytestconfig)
+
+    df1 = pd.DataFrame(
+        {
+            "a": [1.0, np.nan, 0.11122123123, 0.331412414132123123131231],
+            # "b": [
+            #     pd.Timestamp("20130102T12"),
+            #     pd.Timestamp(1513393355.5, unit="s"),
+            #     pd.Timestamp(1513393355, unit="s", tz="US/Pacific"),
+            #     pd.Timestamp(year=2017, month=1, day=1, hour=12),
+            # ],
+            "c": pd.Series(1, index=list(range(4)), dtype="float32"),
+            "d": np.array([3] * 4, dtype="int32"),
+            "e": pd.Categorical(["test", "train", "test", "train"]),
+            "f": ["foo", "oof", "ofo", None],
+        }
+    )
+    df1_table = f"test_upload_abnormal_df_df1_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+    with temporarily_upload_df_to_hive(conn, df1_table, df1):
+        df1_from_sql = feast_hive_module.HiveRetrievalJob(
+            conn, f"SELECT * FROM {df1_table}"
+        ).to_df()
+
+        assert sorted(df1.columns) == sorted(df1_from_sql.columns)
+        assert_frame_equal(
+            df1.sort_values(by=["a"]).reset_index(drop=True),
+            df1_from_sql[df1.columns].sort_values(by=["a"]).reset_index(drop=True),
+            check_dtype=False,
+            check_categorical=False,
         )
 
 

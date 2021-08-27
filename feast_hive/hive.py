@@ -21,6 +21,7 @@ from feast_hive.hive_type_map import hive_to_pa_value_type, pa_to_hive_value_typ
 try:
     from impala.dbapi import connect as impala_connect
     from impala.hiveserver2 import CBatch as ImpalaCBatch
+    from impala.hiveserver2 import Column as ImpalaColumn
     from impala.interface import Connection
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -209,14 +210,18 @@ class HiveRetrievalJob(RetrievalJob):
                     cursor.execute(query)
                 batches = cursor.fetchcolumnar()
                 pa_batches = [
-                    self._convert_hive_batch_to_arrow_batch(b) for b in batches
+                    HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b)
+                    for b in batches
                 ]
                 return pa.Table.from_batches(pa_batches)
 
     @staticmethod
-    def _convert_hive_batch_to_arrow_batch(hive_batch: ImpalaCBatch,) -> pa.RecordBatch:
+    def _convert_hive_batch_to_arrow_batch(hive_batch: ImpalaCBatch) -> pa.RecordBatch:
         return pa.record_batch(
-            [column.values for column in hive_batch.columns],
+            [
+                HiveRetrievalJob._get_values_from_column(column)
+                for column in hive_batch.columns
+            ],
             pa.schema(
                 [
                     (field_info[0], hive_to_pa_value_type(field_info[1]))
@@ -224,6 +229,14 @@ class HiveRetrievalJob(RetrievalJob):
                 ]
             ),
         )
+
+    @staticmethod
+    def _get_values_from_column(column: ImpalaColumn) -> List:
+        values = column.values
+        for i in range(len(values)):
+            if column.nulls[i]:
+                values[i] = None
+        return values
 
 
 def _get_connection(store_config: HiveOfflineStoreConfig) -> Connection:
@@ -284,6 +297,9 @@ def _upload_entity_df(
         cursor.execute(create_entity_table_sql)
 
         def preprocess_value(raw_value, col_type):
+            if raw_value is None:
+                return "null"
+
             col_type = col_type.lower()
 
             if col_type == "timestamp":
@@ -337,8 +353,8 @@ def _upload_entity_df(
 # 3. Change USING to ON
 # 4. Change ANY_VALUE() to MAX()
 # 5. Change subquery `SELECT MAX(entity_timestamp) FROM entity_dataframe` and `SELECT MIN(entity_timestamp) FROM
-#    entity_dataframe` to `join`.
-#    Since Hive does not support more than one subquery, and not supports subquery on non-top level.
+#    entity_dataframe` to `join`. Since Hive does not support more than one subquery, and not supports subquery on
+#    non-top level.
 # We need to keep this query in sync with BigQuery.
 
 MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
