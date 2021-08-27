@@ -135,7 +135,7 @@ class HiveOfflineStore(OfflineStore):
 
             try:
                 entity_schema = _upload_entity_df_and_get_entity_schema(
-                    conn, table_name, entity_df
+                    config, conn, table_name, entity_df
                 )
 
                 entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
