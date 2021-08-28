@@ -215,18 +215,21 @@ class HiveRetrievalJob(RetrievalJob):
                     ]
                 )
                 pa_batches = [
-                    HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b)
+                    HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b, schema)
                     for b in batches
                 ]
-                return pa.Table.from_batches(pa_batches, schema=schema)
+                return pa.Table.from_batches(pa_batches, schema)
 
     @staticmethod
-    def _convert_hive_batch_to_arrow_batch(hive_batch: ImpalaCBatch) -> pa.RecordBatch:
+    def _convert_hive_batch_to_arrow_batch(
+        hive_batch: ImpalaCBatch, schema: pa.Schema
+    ) -> pa.RecordBatch:
         return pa.record_batch(
             [
                 HiveRetrievalJob._get_values_from_column(column)
                 for column in hive_batch.columns
-            ]
+            ],
+            schema,
         )
 
     @staticmethod
