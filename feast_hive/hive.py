@@ -44,7 +44,7 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     database: StrictStr = "default"
     """ Default database when obtaining new cursors """
 
-    timeout: StrictInt = 45
+    timeout: Optional[StrictInt] = None
     """ Connection timeout in seconds when communicating with HiveServer2 """
 
     entity_uploading_chunk_size: StrictInt = 10000
@@ -208,11 +208,17 @@ class HiveRetrievalJob(RetrievalJob):
                 for query in queries:
                     cursor.execute(query)
                 batches = cursor.fetchcolumnar()
+                schema = pa.schema(
+                    [
+                        (field[0], hive_to_pa_value_type(field[1]))
+                        for field in cursor.description
+                    ]
+                )
                 pa_batches = [
                     HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b)
                     for b in batches
                 ]
-                return pa.Table.from_batches(pa_batches)
+                return pa.Table.from_batches(pa_batches, schema=schema)
 
     @staticmethod
     def _convert_hive_batch_to_arrow_batch(hive_batch: ImpalaCBatch) -> pa.RecordBatch:
@@ -220,13 +226,7 @@ class HiveRetrievalJob(RetrievalJob):
             [
                 HiveRetrievalJob._get_values_from_column(column)
                 for column in hive_batch.columns
-            ],
-            pa.schema(
-                [
-                    (field_info[0], hive_to_pa_value_type(field_info[1]))
-                    for field_info in hive_batch.schema
-                ]
-            ),
+            ]
         )
 
     @staticmethod

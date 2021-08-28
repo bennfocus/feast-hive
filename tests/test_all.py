@@ -52,9 +52,27 @@ def temporarily_upload_df_to_hive(
 def get_info_from_pytestconfig(pytestconfig):
     pt_opt_host = pytestconfig.getoption("host")
     pt_opt_port = int(pytestconfig.getoption("port"))
-    offline_store = HiveOfflineStoreConfig(host=pt_opt_host, port=pt_opt_port,)
+    pt_opt_database = pytestconfig.getoption("database")
+    offline_store = HiveOfflineStoreConfig(
+        host=pt_opt_host, port=pt_opt_port, database=pt_opt_database
+    )
     conn = feast_hive_module._get_connection(offline_store)
     return offline_store, conn, pt_opt_host, pt_opt_port
+
+
+def test_empty_result(pytestconfig):
+    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
+
+    empty_df = pd.DataFrame(columns=["a", "b", "c"], dtype=np.int32)
+    table_name = f"test_empty_result_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+
+    with temporarily_upload_df_to_hive(conn, table_name, empty_df):
+        sql_df_job = feast_hive_module.HiveRetrievalJob(
+            conn, f"SELECT * FROM {table_name}"
+        )
+        sql_df = sql_df_job.to_df()
+        assert sorted(sql_df.columns) == sorted(empty_df.columns)
+        assert sql_df.empty
 
 
 def test_hive_source(pytestconfig):
