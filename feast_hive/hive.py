@@ -154,7 +154,7 @@ class HiveOfflineStore(OfflineStore):
                     feature_refs, feature_views, registry, project,
                 )
 
-                query = offline_utils.build_point_in_time_query(
+                rendered_query = offline_utils.build_point_in_time_query(
                     query_context,
                     left_table_query_string=table_name,
                     entity_df_event_timestamp_col=entity_df_event_timestamp_col,
@@ -162,9 +162,12 @@ class HiveOfflineStore(OfflineStore):
                     full_feature_names=full_feature_names,
                 )
 
-                # In order to use `REGEX Column Specification`, we need set up `hive.support.quoted.identifiers`.
+                # In order to use `REGEX Column Specification`, need set `hive.support.quoted.identifiers` to None.
                 # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
-                queries = ["SET hive.support.quoted.identifiers=None", query]
+                queries = [
+                    "SET hive.support.quoted.identifiers=None",
+                    "SET hive.exec.temporary.table.storage=memory",
+                ] + rendered_query.split(";")
 
                 yield queries
 
@@ -348,23 +351,31 @@ def _upload_entity_df_by_insert(
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
-# There are couple of changes from BigQuery:
-# 1. Use "t - interval 'x' second" instead of "Timestamp_sub(...)"
+# There are many changes compare to the BigQuery one:
+#
+# 1. Use "t - interval 'x' second" instead of "Timestamp_sub(...)".
 # 2. Replace `SELECT * EXCEPT (...)` with `REGEX Column Specification`, because `EXCEPT` is not supported by Hive.
-#    Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
-# 3. Change USING to ON
-# 4. Change ANY_VALUE() to MAX()
-# 5. Change subquery `SELECT MAX(entity_timestamp) FROM entity_dataframe` and `SELECT MIN(entity_timestamp) FROM
-#    entity_dataframe` to `join`. Since Hive does not support more than one subquery, and not supports subquery on
-#    non-top level.
-# We need to keep this query in sync with BigQuery.
+#    Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select.
+# 3. Change `USING` to `ON`, since Hive doesn't support `USING`.
+# 4. Change ANY_VALUE() to MAX(), since Hive doesn't support `ANY_VALUE`.
+# 5. Change Subquery `SELECT MAX(entity_timestamp) FROM entity_dataframe` and `SELECT MIN(entity_timestamp) FROM
+#    entity_dataframe` to `INNER JOIN`. Since Hive does not support more than a single Subquery, and doesn't supports
+#    Subquery on non-top level.
+#
+# 6. Mostly big change here is that I tested the original Query on my own Hive set ups (3.0.0 and 3.1.2, based on Spark
+#    and Yarn), the CTE didn't work, `*__cleaned` had no result, but after I changed the CTE to Temporary Table it
+#    worked. Not sure if it was a common case, but here I changed it to the workable Temporary Table.
+# 7. Move `(MIN(entity_timestamp) - interval 'ttl' second)` to SELECT clause, since Temporary Table
+#    does support it in Where clause.
+#
+# In case there was any improvement on BigQuery, probably need to apply here too.
 
 MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
 /*
  Compute a deterministic hash for the `left_table_query_string` that will be used throughout
  all the logic as the field to GROUP BY the data
 */
-WITH entity_dataframe AS (
+CREATE TEMPORARY TABLE entity_dataframe AS (
     SELECT *,
         {{entity_df_event_timestamp_col}} AS entity_timestamp
         {% for featureview in featureviews %}
@@ -376,11 +387,14 @@ WITH entity_dataframe AS (
             ) AS {{featureview.name}}__entity_row_unique_id
         {% endfor %}
     FROM {{ left_table_query_string }}
-),
+);
 
+
+-- Start create temporary table *__base
 {% for featureview in featureviews %}
 
-{{ featureview.name }}__entity_dataframe AS (
+CREATE TEMPORARY TABLE {{ featureview.name }}__base AS
+WITH {{ featureview.name }}__entity_dataframe AS (
     SELECT
         {{ featureview.entities | join(', ')}},
         entity_timestamp,
@@ -414,39 +428,52 @@ WITH entity_dataframe AS (
         {% for feature in featureview.features %}
             {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
-    FROM {{ featureview.table_subquery }}
-    LEFT JOIN (
-        SELECT MAX(entity_timestamp) as max_entity_timestamp
+    FROM {{ featureview.table_subquery }} AS subquery
+    INNER JOIN (
+        SELECT MAX(entity_timestamp) as max_entity_timestamp_
                {% if featureview.ttl == 0 %}{% else %}
-               ,(MIN(entity_timestamp) - interval '{{ featureview.ttl }}' second) as min_entity_timestamp
+               ,(MIN(entity_timestamp) - interval '{{ featureview.ttl }}' second) as min_entity_timestamp_
                {% endif %}
         FROM entity_dataframe
-    ) as temp
-    WHERE {{ featureview.event_timestamp_column }} <= max_entity_timestamp
-    {% if featureview.ttl == 0 %}{% else %}
-    AND {{ featureview.event_timestamp_column }} >=  min_entity_timestamp
-    {% endif %}
-),
-
-{{ featureview.name }}__base AS (
-    SELECT
-        subquery.*,
-        entity_dataframe.entity_timestamp,
-        entity_dataframe.{{featureview.name}}__entity_row_unique_id
-    FROM {{ featureview.name }}__subquery AS subquery
-    INNER JOIN {{ featureview.name }}__entity_dataframe AS entity_dataframe
-    ON ( 
-        subquery.event_timestamp <= entity_dataframe.entity_timestamp
-
+    ) AS temp
+    ON (
+        {{ featureview.event_timestamp_column }} <= max_entity_timestamp_
         {% if featureview.ttl == 0 %}{% else %}
-        AND subquery.event_timestamp >= entity_dataframe.entity_timestamp - interval '{{ featureview.ttl }}' second
+        AND {{ featureview.event_timestamp_column }} >=  min_entity_timestamp_
         {% endif %}
-
-        {% for entity in featureview.entities %}
-        AND subquery.{{ entity }} = entity_dataframe.{{ entity }}
-        {% endfor %}
     )
-),
+)
+SELECT
+    subquery.*,
+    entity_dataframe.entity_timestamp,
+    entity_dataframe.{{featureview.name}}__entity_row_unique_id
+FROM {{ featureview.name }}__subquery AS subquery
+INNER JOIN (
+    SELECT *
+    {% if featureview.ttl == 0 %}{% else %}
+    , (entity_timestamp - interval '{{ featureview.ttl }}' second) as ttl_entity_timestamp
+    {% endif %}
+    FROM {{ featureview.name }}__entity_dataframe
+) AS entity_dataframe
+ON ( 
+    subquery.event_timestamp <= entity_dataframe.entity_timestamp
+
+    {% if featureview.ttl == 0 %}{% else %}
+    AND subquery.event_timestamp >= entity_dataframe.ttl_entity_timestamp
+    {% endif %}
+
+    {% for entity in featureview.entities %}
+    AND subquery.{{ entity }} = entity_dataframe.{{ entity }}
+    {% endfor %}
+);
+
+{% endfor %}
+-- End create temporary table *__base
+
+
+{% for featureview in featureviews %}
+
+{% if loop.first %}WITH{% endif %}
 
 /*
  2. If the `created_timestamp_column` has been set, we need to
@@ -509,6 +536,7 @@ WITH entity_dataframe AS (
 
 
 {% endfor %}
+
 /*
  Joins the outputs of multiple time travel joins to a single table.
  The entity_dataframe dataset being our source of truth here.
