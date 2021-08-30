@@ -5,7 +5,7 @@ For more details, can check [this Feast issue](https://github.com/feast-dev/feas
 
 ## Important
 
-**The first stable version (v0.1.0) has been published, please create an issue if you have met any problem.**
+**The first stable version (v0.1.1) has been published, please create an issue if you have met any problem.**
 
 #### Todo & Progress
 - [DONE] ~~I am working on the first workable version, think it will be released in a couple of days.~~
@@ -97,9 +97,9 @@ from feast_hive import HiveSource
 driver_hourly_stats = HiveSource(
     # table='driver_stats',
     query = """
-    SELECT from_unixtime(cast(event_timestamp / 1000000 as bigint)) AS event_timestamp, 
+    SELECT Timestamp(cast(event_timestamp / 1000000 as bigint)) AS event_timestamp, 
            driver_id, conv_rate, acc_rate, avg_daily_trips, 
-           from_unixtime(cast(created / 1000000 as bigint)) AS created 
+           Timestamp(cast(created / 1000000 as bigint)) AS created 
     FROM driver_stats
     """,
     event_timestamp_column="event_timestamp",
