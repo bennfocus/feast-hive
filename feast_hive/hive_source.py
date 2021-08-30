@@ -180,6 +180,8 @@ class HiveSource(DataSource):
     def get_table_column_names_and_types(
         self, config: RepoConfig
     ) -> Iterable[Tuple[str, str]]:
+        from impala.error import HiveServer2Error
+
         from feast_hive.hive import _get_connection
 
         with _get_connection(config.offline_store) as conn:
@@ -197,8 +199,11 @@ class HiveSource(DataSource):
                         raise DataSourceNotFoundException(self.table)
 
                 else:
-                    cursor.execute(f"SELECT * FROM ({self.query}) AS t LIMIT 1")
-                    if not cursor.fetchone():
-                        raise DataSourceNotFoundException(self.query)
+                    try:
+                        cursor.execute(f"SELECT * FROM ({self.query}) AS t LIMIT 1")
+                        if not cursor.fetchone():
+                            raise DataSourceNotFoundException(self.query)
 
-                    return [(field[0], field[1]) for field in cursor.description]
+                        return [(field[0], field[1]) for field in cursor.description]
+                    except HiveServer2Error:
+                        raise DataSourceNotFoundException(self.query)

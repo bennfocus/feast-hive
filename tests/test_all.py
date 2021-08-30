@@ -107,12 +107,25 @@ def test_hive_source(pytestconfig):
             offline_store=offline_store,
         )
 
-        # Test with table
+        non_existed_table = f"{table_name}_non_existed"
+
+        # Test table doesn't exist
+        hive_source_table = HiveSource(table=non_existed_table)
+        assertpy.assert_that(hive_source_table.validate).raises(
+            errors.DataSourceNotFoundException
+        ).when_called_with(config)
+
+        hive_source_table = HiveSource(query=f"SELECT * FROM {non_existed_table}")
+        assertpy.assert_that(hive_source_table.validate).raises(
+            errors.DataSourceNotFoundException
+        ).when_called_with(config)
+
+        # Test table
         hive_source_table = HiveSource(table=table_name)
         schema1 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema1
 
-        # Test with query
+        # Test query
         hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100")
         schema2 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema2
