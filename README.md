@@ -92,7 +92,8 @@ from feast import Entity, Feature, FeatureView, ValueType
 from feast_hive import HiveSource
 
 # Read data from Hive table
-# Here we use a Query to reused the original parquet data, but you can replace to your own Table or Query.
+# Here we use a Query to reuse the original parquet data, 
+# but you can replace to your own Table or Query.
 driver_hourly_stats = HiveSource(
     # table='driver_stats',
     query = """
