@@ -103,6 +103,9 @@ class HiveOfflineStore(OfflineStore):
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
         field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
 
+        start_date = _format_datetime(start_date)
+        end_date = _format_datetime(end_date)
+
         query = f"""
                 SELECT {field_string}
                 FROM (
@@ -251,6 +254,14 @@ def _get_connection(store_config: HiveOfflineStoreConfig) -> Connection:
     )
 
 
+def _format_datetime(t: datetime):
+    # Since Hive does not support timezone, need to transform to utc.
+    if t.tzinfo:
+        t = t.astimezone(tz=utc)
+    t = t.strftime("%Y-%m-%d %H:%M:%S.%f")
+    return t
+
+
 def _upload_entity_df_and_get_entity_schema(
     config: RepoConfig,
     conn: Connection,
@@ -313,10 +324,7 @@ def _upload_entity_df_by_insert(
 
             if col_type == "timestamp":
                 if isinstance(raw_value, datetime):
-                    # Since Hive does not support timezone, need to transform to utc.
-                    if raw_value.tzinfo:
-                        raw_value = raw_value.astimezone(tz=utc)
-                    raw_value = raw_value.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    raw_value = _format_datetime(raw_value)
                     return f'"{raw_value}"'
                 else:
                     return f'"{raw_value}"'

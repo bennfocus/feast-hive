@@ -1,14 +1,15 @@
 import contextlib
 import os
+import uuid
+from pathlib import Path
 import random
 import time
 from datetime import datetime
 from tempfile import TemporaryDirectory
+from typing import Union, Iterator, Tuple
 
-import pandas as pd
 import numpy as np
-from typing import Union, Iterator
-
+import pandas as pd
 import pytest
 from assertpy import assertpy
 from feast import (
@@ -17,6 +18,7 @@ from feast import (
     FeatureStore,
     RepoConfig,
     errors,
+    FeatureView,
 )
 from feast.infra.online_stores.sqlite import SqliteOnlineStoreConfig
 from impala.interface import Connection
@@ -58,6 +60,52 @@ def get_info_from_pytestconfig(pytestconfig):
     )
     conn = feast_hive_module._get_connection(offline_store)
     return offline_store, conn, pt_opt_host, pt_opt_port
+
+
+@contextlib.contextmanager
+def prep_hive_fs_and_fv(
+    pytestconfig, source_type: str,
+) -> Iterator[Tuple[FeatureStore, FeatureView]]:
+    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
+
+    df = feast_tests_funcs.create_dataset()
+    table_name = f"test_ingestion_{source_type}_correctness_{int(time.time_ns())}_{random.randint(1000, 9999)}"
+
+    with temporarily_upload_df_to_hive(
+        conn, table_name, df
+    ), TemporaryDirectory() as repo_dir_name, TemporaryDirectory() as data_dir_name:
+
+        hive_source = HiveSource(
+            table=table_name if source_type == "table" else None,
+            query=f"SELECT * FROM {table_name}" if source_type == "query" else None,
+            event_timestamp_column="ts",
+            created_timestamp_column="created_ts",
+            date_partition_column="",
+            field_mapping={"ts_1": "ts", "id": "driver_id"},
+        )
+
+        fv = feast_tests_funcs.correctness_feature_view(hive_source)
+        e = Entity(
+            name="driver",
+            description="id for driver",
+            join_key="driver_id",
+            value_type=ValueType.INT32,
+        )
+        config = RepoConfig(
+            registry=str(Path(repo_dir_name) / "registry.db"),
+            project=f"test_bq_correctness_{str(uuid.uuid4()).replace('-', '')}",
+            provider="local",
+            online_store=SqliteOnlineStoreConfig(
+                path=str(Path(data_dir_name) / "online_store.db")
+            ),
+            offline_store=offline_store,
+        )
+        fs = FeatureStore(config=config)
+        fs.apply([fv, e])
+
+        yield fs, fv
+
+        fs.teardown()
 
 
 def test_empty_result(pytestconfig):
@@ -432,3 +480,16 @@ def test_historical_features_from_hive_sources(
             raise
         finally:
             store.teardown()
+
+
+@pytest.mark.parametrize(
+    "source_type", ["query", "table"],
+)
+@pytest.mark.parametrize("full_feature_names", [True, False])
+def test_hive_offline_online_store_consistency(
+    pytestconfig, source_type: str, full_feature_names: bool
+):
+    with prep_hive_fs_and_fv(pytestconfig, source_type) as (fs, fv):
+        feast_tests_funcs.run_offline_online_store_consistency_test(
+            fs, fv, full_feature_names
+        )
