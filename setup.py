@@ -2,10 +2,10 @@
 
 from setuptools import setup
 
-with open("README.md") as f:
+with open("README.md", "r", encoding="utf-8") as f:
     readme = f.read()
 
-with open("LICENSE") as f:
+with open("LICENSE", "r", encoding="utf-8") as f:
     license = f.read()
 
 INSTALL_REQUIRE = [
@@ -24,7 +24,7 @@ DEV_REQUIRE = [
 
 setup(
     name="feast-hive",
-    version="0.1",
+    version="0.1.0",
     author="Benn Ma",
     author_email="bennmsg@gmail.com",
     description="Hive support for Feast offline store",
@@ -32,6 +32,9 @@ setup(
     long_description_content_type="text/markdown",
     python_requires=">=3.7.0",
     url="https://github.com/baineng/feast-hive",
+    project_urls={
+        "Bug Tracker": "https://github.com/baineng/feast-hive/issues",
+    },
     license=license,
     packages=["feast_hive"],
     install_requires=INSTALL_REQUIRE,

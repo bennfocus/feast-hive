@@ -4,11 +4,12 @@ Hive is not included in current [Feast](https://github.com/feast-dev/feast) road
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
 ## Important
-**This project is still being actively developed and not ready for using yet.**
 
-Plan & Progress:
-- I am working on the first workable version, think it will be released in a couple of days.
-- Currently, it only supports `multiple insert` for uploading entity_df, which will be a little inefficient, I will provide some extra parameters for users who are able to provide WebHDFS address in next version. 
+**The first stable version (v0.1.0) has been published, please create an issue if you have met any problem.**
+
+#### Todo & Progress
+- [DONE] ~~I am working on the first workable version, think it will be released in a couple of days.~~
+- It only supports `insert into` for uploading entity_df for now, which will be a little inefficient. In next version, I will provide some extra parameters for users who are able to provide WebHDFS address. 
 
 ## Quickstart
 
@@ -20,18 +21,16 @@ pip install feast
 
 #### Install feast-hive
 
-Install the latest dev version by pip:
+- Install stable version
+
+```shell
+pip install feast-hive 
+```
+
+- Install develop version (not stable):
 
 ```shell
 pip install git+https://github.com/baineng/feast-hive.git 
-```
-
-or by clone the repo:
-
-```shell
-git clone https://github.com/baineng/feast-hive.git
-cd feast-hive
-python setup.py install
 ```
 
 #### Create a feature repository
@@ -52,13 +51,37 @@ provider: local
 offline_store:
     type: feast_hive.HiveOfflineStore
     host: localhost
-    port: 10000 # default
+    port: 10000        # default is `10000`
+    database: default  # default is `default`
     ... # other parameters
 online_store:
     ...
 ```
 
-#### Add `hive_example.py`
+#### Create Hive Table
+
+1. Upload `data/driver_stats.parquet` to HDFS
+```shell
+hdfs dfs -copyFromLocal ./data/driver_stats.parquet /tmp/
+```
+2. Create Hive Table
+```sql
+CREATE TABLE driver_stats (
+    event_timestamp   bigint,
+    driver_id         bigint,
+    conv_rate         float,
+    acc_rate          float,
+    avg_daily_trips   int,
+    created           bigint
+)
+STORED AS PARQUET;
+```
+3. Load data into the table
+```sql
+LOAD DATA INPATH '/tmp/driver_stats.parquet' INTO TABLE driver_stats;
+```
+
+#### Edit `example.py`
 
 ```python
 # This is an example feature definition file
@@ -69,10 +92,16 @@ from feast import Entity, Feature, FeatureView, ValueType
 from feast_hive import HiveSource
 
 # Read data from Hive table
-# Need make sure the table exists and have data before continue.
+# Here we use a Query to reused the original parquet data, but you can replace to your own Table or Query.
 driver_hourly_stats = HiveSource(
-    table='example.driver_stats',
-    event_timestamp_column="datetime",
+    # table='driver_stats',
+    query = """
+    SELECT from_unixtime(cast(event_timestamp / 1000000 as bigint)) AS event_timestamp, 
+           driver_id, conv_rate, acc_rate, avg_daily_trips, 
+           from_unixtime(cast(created / 1000000 as bigint)) AS created 
+    FROM driver_stats
+    """,
+    event_timestamp_column="event_timestamp",
     created_timestamp_column="created",
 )
 
@@ -125,5 +154,5 @@ makr lint
 
 ```shell
 pip install -e .[test]
-pytest -n 6 --host=localhost --port=10000
+pytest -n 6 --host=localhost --port=10000 --database=default
 ```
