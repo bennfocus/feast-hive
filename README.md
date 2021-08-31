@@ -4,7 +4,7 @@ Hive is not included in current [Feast](https://github.com/feast-dev/feast) road
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
 ## Todo List
-- [DONE, v0.0.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
+- [DONE, v0.1.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
 - Allow custom hive conf when connect to a HiveServer2 
 - It only supports `insert into` for uploading entity_df for now, which will be a little inefficient. In next version, I will provide some extra parameters for users who are able to provide WebHDFS address. 
 
