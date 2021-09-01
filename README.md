@@ -145,7 +145,7 @@ pip install -e .[dev]
 
 # before commit
 make format
-makr lint
+make lint
 ```
 
 #### Testing
