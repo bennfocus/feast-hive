@@ -5,9 +5,6 @@ from setuptools import setup
 with open("README.md", "r", encoding="utf-8") as f:
     readme = f.read()
 
-with open("LICENSE", "r", encoding="utf-8") as f:
-    license = f.read()
-
 INSTALL_REQUIRE = [
     "feast>=0.12.0",
     "impyla[kerberos]>=0.15.0",
@@ -35,7 +32,7 @@ setup(
     project_urls={
         "Bug Tracker": "https://github.com/baineng/feast-hive/issues",
     },
-    license=license,
+    license='Apache License, Version 2.0',
     packages=["feast_hive"],
     install_requires=INSTALL_REQUIRE,
     extras_require={
