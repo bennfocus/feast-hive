@@ -22,7 +22,8 @@ try:
     from impala.dbapi import connect as impala_connect
     from impala.hiveserver2 import CBatch as ImpalaCBatch
     from impala.hiveserver2 import Column as ImpalaColumn
-    from impala.interface import Connection
+    from impala.interface import Connection as ImpalaConnection
+    from impala.interface import Cursor as ImpalaCursor
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
 
@@ -46,6 +47,9 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
 
     timeout: Optional[StrictInt] = None
     """ Connection timeout in seconds when communicating with HiveServer2 """
+
+    hive_conf: Optional[Dict[str, str]] = None
+    """ Configuration overlay for the HiveServer2 session """
 
     entity_uploading_chunk_size: StrictInt = 10000
     """ The chunk size of multiple insert when uploading entity_df to Hive,
@@ -73,6 +77,28 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
 
     kerberos_service_name: StrictStr = "impala"
     """ Specify particular impalad service principal. """
+
+
+class HiveConnection:
+    def __init__(self, store_config: HiveOfflineStoreConfig):
+        assert isinstance(store_config, HiveOfflineStoreConfig)
+        self._store_config = store_config
+        self._real_conn = impala_connect(
+            **store_config.dict(exclude={"type", "entity_uploading_chunk_size"})
+        )
+
+    @property
+    def real_conn(self) -> ImpalaConnection:
+        return self._real_conn
+
+    def close(self) -> None:
+        self.real_conn.close()
+
+    def cursor(self) -> ImpalaCursor:
+        if self._store_config.hive_conf:
+            return self.real_conn.cursor(configuration=self._store_config.hive_conf)
+        else:
+            return self.real_conn.cursor()
 
 
 class HiveOfflineStore(OfflineStore):
@@ -117,7 +143,8 @@ class HiveOfflineStore(OfflineStore):
                 WHERE feast_row_ = 1
                 """
 
-        return HiveRetrievalJob(_get_connection(config.offline_store), query)
+        conn = HiveConnection(config.offline_store)
+        return HiveRetrievalJob(conn, query)
 
     @staticmethod
     def get_historical_features(
@@ -130,7 +157,7 @@ class HiveOfflineStore(OfflineStore):
         full_feature_names: bool = False,
     ) -> RetrievalJob:
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
-        conn = _get_connection(config.offline_store)
+        conn = HiveConnection(config.offline_store)
 
         @contextlib.contextmanager
         def query_generator() -> Iterator[List[str]]:
@@ -184,7 +211,7 @@ class HiveOfflineStore(OfflineStore):
 class HiveRetrievalJob(RetrievalJob):
     def __init__(
         self,
-        conn: Connection,
+        conn: HiveConnection,
         queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
     ):
         assert (
@@ -247,13 +274,6 @@ class HiveRetrievalJob(RetrievalJob):
         return values
 
 
-def _get_connection(store_config: HiveOfflineStoreConfig) -> Connection:
-    assert isinstance(store_config, HiveOfflineStoreConfig)
-    return impala_connect(
-        **store_config.dict(exclude={"type", "entity_uploading_chunk_size"})
-    )
-
-
 def _format_datetime(t: datetime):
     # Since Hive does not support timezone, need to transform to utc.
     if t.tzinfo:
@@ -264,7 +284,7 @@ def _format_datetime(t: datetime):
 
 def _upload_entity_df_and_get_entity_schema(
     config: RepoConfig,
-    conn: Connection,
+    conn: HiveConnection,
     table_name: str,
     entity_df: Union[pd.DataFrame, str],
 ) -> Dict[str, np.dtype]:
@@ -290,7 +310,7 @@ def _upload_entity_df_and_get_entity_schema(
 
 
 def _upload_entity_df_by_insert(
-    conn: Connection,
+    conn: HiveConnection,
     table_name: str,
     entity_df: Union[pd.DataFrame, str],
     chunk_size: int = None,

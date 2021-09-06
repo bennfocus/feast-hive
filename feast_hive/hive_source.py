@@ -182,9 +182,9 @@ class HiveSource(DataSource):
     ) -> Iterable[Tuple[str, str]]:
         from impala.error import HiveServer2Error
 
-        from feast_hive.hive import _get_connection
+        from feast_hive.hive import HiveConnection
 
-        with _get_connection(config.offline_store) as conn:
+        with HiveConnection(config.offline_store) as conn:
             with conn.cursor() as cursor:
                 if self.table is not None:
                     table_splits = self.table.rsplit(".", 1)

@@ -58,7 +58,7 @@ def get_info_from_pytestconfig(pytestconfig):
     offline_store = HiveOfflineStoreConfig(
         host=pt_opt_host, port=pt_opt_port, database=pt_opt_database
     )
-    conn = feast_hive_module._get_connection(offline_store)
+    conn = feast_hive_module.HiveConnection(offline_store)
     return offline_store, conn, pt_opt_host, pt_opt_port
 
 
