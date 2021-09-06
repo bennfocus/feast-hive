@@ -6,7 +6,7 @@ import random
 import time
 from datetime import datetime
 from tempfile import TemporaryDirectory
-from typing import Union, Iterator, Tuple
+from typing import Union, Iterator, Tuple, Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,6 @@ from feast import (
     FeatureView,
 )
 from feast.infra.online_stores.sqlite import SqliteOnlineStoreConfig
-from impala.interface import Connection
 from pandas._testing import assert_frame_equal
 
 from feast_hive import (
@@ -29,6 +28,7 @@ from feast_hive import (
     HiveOfflineStoreConfig,
     HiveSource,
 )
+from feast_hive.hive import HiveConnection
 from tests import feast_tests_funcs
 
 
@@ -39,7 +39,7 @@ def fake_upload_df_to_hive() -> Iterator[None]:
 
 @contextlib.contextmanager
 def temporarily_upload_df_to_hive(
-    conn: Connection, table_name: str, entity_df: Union[pd.DataFrame, str]
+    conn: HiveConnection, table_name: str, entity_df: Union[pd.DataFrame, str]
 ) -> Iterator[None]:
     try:
         feast_hive_module._upload_entity_df_by_insert(conn, table_name, entity_df)
@@ -51,23 +51,29 @@ def temporarily_upload_df_to_hive(
             cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def get_info_from_pytestconfig(pytestconfig):
-    pt_opt_host = pytestconfig.getoption("host")
-    pt_opt_port = int(pytestconfig.getoption("port"))
-    pt_opt_database = pytestconfig.getoption("database")
-    offline_store = HiveOfflineStoreConfig(
-        host=pt_opt_host, port=pt_opt_port, database=pt_opt_database
-    )
+def get_options_from_pytestconfig(pytestconfig,) -> Dict[str, Any]:
+    return {
+        "host": pytestconfig.getoption("host"),
+        "port": int(pytestconfig.getoption("port")),
+        "database": pytestconfig.getoption("database"),
+    }
+
+
+@pytest.fixture()
+def hive_conn_info(pytestconfig):
+    options = get_options_from_pytestconfig(pytestconfig)
+    offline_store = HiveOfflineStoreConfig(**options)
     conn = feast_hive_module.HiveConnection(offline_store)
-    return offline_store, conn, pt_opt_host, pt_opt_port
+
+    yield offline_store, conn, options
+
+    conn.close()
 
 
 @contextlib.contextmanager
 def prep_hive_fs_and_fv(
-    pytestconfig, source_type: str,
+    offline_store, conn, source_type: str,
 ) -> Iterator[Tuple[FeatureStore, FeatureView]]:
-    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
-
     df = feast_tests_funcs.create_dataset()
     table_name = f"test_ingestion_{source_type}_correctness_{int(time.time_ns())}_{random.randint(1000, 9999)}"
 
@@ -108,8 +114,8 @@ def prep_hive_fs_and_fv(
         fs.teardown()
 
 
-def test_empty_result(pytestconfig):
-    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
+def test_empty_result(hive_conn_info):
+    offline_store, conn, _ = hive_conn_info
 
     empty_df = pd.DataFrame(columns=["a", "b", "c"], dtype=np.int32)
     table_name = f"test_empty_result_{int(time.time_ns())}_{random.randint(1000, 9999)}"
@@ -123,8 +129,8 @@ def test_empty_result(pytestconfig):
         assert sql_df.empty
 
 
-def test_hive_source(pytestconfig):
-    offline_store, conn, hs2_host, hs2_port = get_info_from_pytestconfig(pytestconfig)
+def test_hive_source(hive_conn_info):
+    offline_store, conn, _ = hive_conn_info
 
     df = pd.DataFrame(
         {
@@ -179,8 +185,8 @@ def test_hive_source(pytestconfig):
         assert expected_schema == schema2
 
 
-def test_upload_entity_df(pytestconfig):
-    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
+def test_upload_entity_df(hive_conn_info):
+    offline_store, conn, _ = hive_conn_info
 
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (_, _, _, orders_df, _,) = feast_tests_funcs.generate_entities(start_date, True)
@@ -202,8 +208,8 @@ def test_upload_entity_df(pytestconfig):
         )
 
 
-def test_upload_abnormal_df(pytestconfig):
-    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
+def test_upload_abnormal_df(hive_conn_info):
+    offline_store, conn, _ = hive_conn_info
 
     df1 = pd.DataFrame(
         {
@@ -245,9 +251,9 @@ def test_upload_abnormal_df(pytestconfig):
     "full_feature_names", [False, True],
 )
 def test_historical_features_from_hive_sources(
-    provider_type, infer_event_timestamp_col, capsys, full_feature_names, pytestconfig
+    provider_type, infer_event_timestamp_col, capsys, full_feature_names, hive_conn_info
 ):
-    offline_store, conn, _, _ = get_info_from_pytestconfig(pytestconfig)
+    offline_store, conn, _ = hive_conn_info
     start_date = datetime.now().replace(microsecond=0, second=0, minute=0)
     (
         customer_entities,
@@ -487,9 +493,28 @@ def test_historical_features_from_hive_sources(
 )
 @pytest.mark.parametrize("full_feature_names", [True, False])
 def test_hive_offline_online_store_consistency(
-    pytestconfig, source_type: str, full_feature_names: bool
+    hive_conn_info, source_type: str, full_feature_names: bool
 ):
-    with prep_hive_fs_and_fv(pytestconfig, source_type) as (fs, fv):
+    offline_store, conn, _ = hive_conn_info
+    with prep_hive_fs_and_fv(offline_store, conn, source_type) as (fs, fv):
         feast_tests_funcs.run_offline_online_store_consistency_test(
             fs, fv, full_feature_names
         )
+
+
+def test_hive_config(pytestconfig):
+    options = get_options_from_pytestconfig(pytestconfig)
+    options["hive_conf"] = {  # give it some special values
+        "hive.join.cache.size": 14797,
+        "hive.exec.max.dynamic.partitions": 779,
+    }
+    offline_store = HiveOfflineStoreConfig(**options)
+    with contextlib.closing(feast_hive_module.HiveConnection(offline_store)) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SET hive.join.cache.size")
+            expected = ("hive.join.cache.size=14797",)
+            assert cursor.fetchone() == expected
+
+            cursor.execute("SET hive.exec.max.dynamic.partitions")
+            expected = ("hive.exec.max.dynamic.partitions=779",)
+            assert cursor.fetchone() == expected
