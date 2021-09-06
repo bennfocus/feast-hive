@@ -1,10 +1,10 @@
 import contextlib
 import os
-import uuid
-from pathlib import Path
 import random
 import time
+import uuid
 from datetime import datetime
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Union, Iterator, Tuple, Any, Dict
 
@@ -509,7 +509,7 @@ def test_hive_config(pytestconfig):
         "hive.exec.max.dynamic.partitions": 779,
     }
     offline_store = HiveOfflineStoreConfig(**options)
-    with contextlib.closing(feast_hive_module.HiveConnection(offline_store)) as conn:
+    with feast_hive_module.HiveConnection(offline_store) as conn:
         with conn.cursor() as cursor:
             cursor.execute("SET hive.join.cache.size")
             expected = ("hive.join.cache.size=14797",)

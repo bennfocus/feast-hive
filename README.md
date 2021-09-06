@@ -5,8 +5,8 @@ For more details, can check [this Feast issue](https://github.com/feast-dev/feas
 
 ## Todo List
 - [DONE, v0.1.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
-- Allow custom hive conf when connect to a HiveServer2 
-- It only supports `insert into` for uploading entity_df for now, which will be a little inefficient. In next version, I will provide some extra parameters for users who are able to provide WebHDFS address. 
+- [DONE, v0.1.2] ~~Allow custom hive conf when connect to a HiveServer2~~ 
+- It currently supports `insert into` for uploading entity_df, which is a little inefficient, gonna add extra parameters for people who are able to provide HDFS address in next version (for uploading to HDFS). 
 
 ## Quickstart
 
@@ -48,8 +48,11 @@ provider: local
 offline_store:
     type: feast_hive.HiveOfflineStore
     host: localhost
-    port: 10000        # default is `10000`
-    database: default  # default is `default`
+    port: 10000        # optional, default is `10000`
+    database: default  # optional, default is `default`
+    hive_conf:         # optional, hive conf overlay
+      hive.join.cache.size: 14797
+      hive.exec.max.dynamic.partitions: 779
     ... # other parameters
 online_store:
     ...

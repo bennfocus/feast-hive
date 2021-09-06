@@ -7,6 +7,7 @@ import pandas as pd
 import pyarrow as pa
 from pydantic import StrictBool, StrictInt, StrictStr
 from pytz import utc
+from six import reraise
 
 from feast import FeatureView
 from feast.data_source import DataSource
@@ -101,6 +102,14 @@ class HiveConnection:
             return self.real_conn.cursor(configuration=self._store_config.hive_conf)
         else:
             return self.real_conn.cursor()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        if exc_type is not None:
+            reraise(exc_type, exc_val, exc_tb)
 
 
 class HiveOfflineStore(OfflineStore):

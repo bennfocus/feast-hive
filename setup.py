@@ -21,7 +21,7 @@ DEV_REQUIRE = [
 
 setup(
     name="feast-hive",
-    version="0.1.1",
+    version="0.1.2",
     author="Benn Ma",
     author_email="bennmsg@gmail.com",
     description="Hive support for Feast offline store",
