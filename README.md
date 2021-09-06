@@ -3,6 +3,8 @@
 Hive is not included in current [Feast](https://github.com/feast-dev/feast) roadmap, this project intends to add Hive support for Offline Store.  
 For more details, can check [this Feast issue](https://github.com/feast-dev/feast/issues/1686).
 
+**The public releases have passed all integration tests, please create an issue if you got any problem.**
+
 ## Todo List
 - [DONE, v0.1.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
 - [DONE, v0.1.2] ~~Allow custom hive conf when connect to a HiveServer2~~ 
