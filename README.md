@@ -146,7 +146,7 @@ The rest are as same as [Feast Quickstart](https://docs.feast.dev/quickstart#gen
 git clone https://github.com/baineng/feast-hive.git
 cd feast-hive
 # creating virtual env ...
-pip install -e .[dev]
+pip install -e ".[dev]"
 
 # before commit
 make format
@@ -156,6 +156,6 @@ make lint
 #### Testing
 
 ```shell
-pip install -e .[test]
+pip install -e ".[test]"
 pytest -n 6 --host=localhost --port=10000 --database=default
 ```
