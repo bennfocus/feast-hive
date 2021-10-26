@@ -210,6 +210,7 @@ class HiveOfflineStore(OfflineStore):
                 # In order to use `REGEX Column Specification`, need set `hive.support.quoted.identifiers` to None.
                 # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
                 queries = [
+                    "SET hive.strict.checks.cartesian.product=false",
                     "SET hive.support.quoted.identifiers=None",
                     "SET hive.exec.temporary.table.storage=memory",
                 ] + rendered_query.split(";")
