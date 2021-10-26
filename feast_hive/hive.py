@@ -16,6 +16,9 @@ from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+from feast.on_demand_feature_view import OnDemandFeatureView
+
+
 from feast_hive.hive_source import HiveSource
 from feast_hive.hive_type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
@@ -199,6 +202,7 @@ class HiveOfflineStore(OfflineStore):
                     query_context,
                     left_table_query_string=table_name,
                     entity_df_event_timestamp_col=entity_df_event_timestamp_col,
+                    entity_df_columns=entity_schema.keys(),
                     query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
                     full_feature_names=full_feature_names,
                 )
@@ -216,7 +220,8 @@ class HiveOfflineStore(OfflineStore):
                 with conn.cursor() as cursor:
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
-        return HiveRetrievalJob(conn, query_generator)
+        return HiveRetrievalJob(conn, query_generator, full_feature_names=full_feature_names,
+                                on_demand_feature_views=None)
 
 
 class HiveRetrievalJob(RetrievalJob):
@@ -224,6 +229,8 @@ class HiveRetrievalJob(RetrievalJob):
         self,
         conn: HiveConnection,
         queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
+        full_feature_names: bool,
+        on_demand_feature_views: Optional[List[OnDemandFeatureView]],
     ):
         assert (
             isinstance(queries, str) or isinstance(queries, list) or callable(queries)
@@ -243,10 +250,21 @@ class HiveRetrievalJob(RetrievalJob):
 
         self._conn = conn
 
-    def to_df(self) -> pd.DataFrame:
+        self._full_feature_names = full_feature_names
+        self._on_demand_feature_views = on_demand_feature_views
+
+    @property
+    def full_feature_names(self) -> bool:
+        return self._full_feature_names
+
+    @property
+    def on_demand_feature_views(self) -> Optional[List[OnDemandFeatureView]]:
+        return self._on_demand_feature_views
+
+    def _to_df_internal(self) -> pd.DataFrame:
         return self.to_arrow().to_pandas()
 
-    def to_arrow(self) -> pa.Table:
+    def _to_arrow_internal(self) -> pa.Table:
         with self._queries_generator() as queries:
             with self._conn.cursor() as cursor:
                 for query in queries:
