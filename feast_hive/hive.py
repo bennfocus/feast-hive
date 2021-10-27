@@ -1,6 +1,6 @@
 import contextlib
 from datetime import datetime
-from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Union
+from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Union, Iterable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -115,6 +115,18 @@ class HiveConnection:
             reraise(exc_type, exc_val, exc_tb)
 
 
+def list_final_feature_names(entity_df_columns, feature_view_query_contexts, full_feature_names) -> List[str]:
+    final_output_feature_names = list(entity_df_columns)
+    final_output_feature_names.extend(
+        [
+            (f"{fv.name}__{feature}" if full_feature_names else feature)
+            for fv in feature_view_query_contexts
+            for feature in fv.features
+        ]
+    )
+    return final_output_feature_names
+
+
 class HiveOfflineStore(OfflineStore):
     @staticmethod
     def pull_latest_from_table_or_query(
@@ -173,8 +185,10 @@ class HiveOfflineStore(OfflineStore):
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
         conn = HiveConnection(config.offline_store)
 
+        final_feature_names = None
+
         @contextlib.contextmanager
-        def query_generator() -> Iterator[List[str]]:
+        def query_generator() -> Tuple[Iterator[List[str]], Iterator[str]]:
             table_name = offline_utils.get_temp_entity_table_name()
 
             try:
@@ -194,12 +208,16 @@ class HiveOfflineStore(OfflineStore):
                     entity_schema, expected_join_keys, entity_df_event_timestamp_col
                 )
 
-                query_context = offline_utils.get_feature_view_query_context(
+                query_contexts = offline_utils.get_feature_view_query_context(
                     feature_refs, feature_views, registry, project,
                 )
 
+                final_feature_names = list_final_feature_names(
+                    entity_df_columns=entity_schema.keys(), feature_view_query_contexts=query_contexts,
+                    full_feature_names=full_feature_names)
+
                 rendered_query = offline_utils.build_point_in_time_query(
-                    query_context,
+                    query_contexts,
                     left_table_query_string=table_name,
                     entity_df_event_timestamp_col=entity_df_event_timestamp_col,
                     entity_df_columns=entity_schema.keys(),
@@ -215,13 +233,13 @@ class HiveOfflineStore(OfflineStore):
                     "SET hive.exec.temporary.table.storage=memory",
                 ] + rendered_query.split(";")
 
-                yield queries
+                yield queries, final_feature_names
 
             finally:
                 with conn.cursor() as cursor:
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
-        return HiveRetrievalJob(conn, query_generator, full_feature_names=full_feature_names,
+        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=full_feature_names,
                                 on_demand_feature_views=None)
 
 
@@ -230,6 +248,7 @@ class HiveRetrievalJob(RetrievalJob):
         self,
         conn: HiveConnection,
         queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
+        config: RepoConfig,
         full_feature_names: bool,
         on_demand_feature_views: Optional[List[OnDemandFeatureView]],
     ):
@@ -240,17 +259,19 @@ class HiveRetrievalJob(RetrievalJob):
         if callable(queries):
             self._queries_generator = queries
         else:
-            if isinstance(queries, str):
-                queries = [queries]
-
-            @contextlib.contextmanager
-            def query_generator() -> Iterator[List[str]]:
-                yield queries
-
-            self._queries_generator = query_generator
+            assert False
+        # else:
+        #     if isinstance(queries, str):
+        #         queries = [queries]
+        #
+        #     @contextlib.contextmanager
+        #     def query_generator() -> Iterator[List[str]]:
+        #         yield queries
+        #
+        #     self._queries_generator = query_generator
 
         self._conn = conn
-
+        self.config = config
         self._full_feature_names = full_feature_names
         self._on_demand_feature_views = on_demand_feature_views
 
@@ -266,17 +287,26 @@ class HiveRetrievalJob(RetrievalJob):
         return self.to_arrow().to_pandas()
 
     def _to_arrow_internal(self) -> pa.Table:
-        with self._queries_generator() as queries:
+        with self._queries_generator() as (queries, final_feature_names):
+            # print(final_feature_names)
             with self._conn.cursor() as cursor:
                 for query in queries:
+                    # print("-----")
+                    # print(query)
                     cursor.execute(query)
                 batches = cursor.fetchcolumnar()
-                schema = pa.schema(
-                    [
-                        (field[0], hive_to_pa_value_type(field[1]))
-                        for field in cursor.description
-                    ]
-                )
+                if final_feature_names is None:
+                    schema = pa.schema(
+                        [
+                            (field[0], hive_to_pa_value_type(field[1]))
+                            for field in cursor.description
+                        ]
+                    )
+                else:
+                    schema = pa.schema(
+                        [(final_name, hive_to_pa_value_type(field[1]))
+                         for (field, final_name) in zip(cursor.description, final_feature_names)]
+                    )
                 pa_batches = [
                     HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b, schema)
                     for b in batches
