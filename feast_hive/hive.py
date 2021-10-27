@@ -158,19 +158,25 @@ class HiveOfflineStore(OfflineStore):
         start_date = _format_datetime(start_date)
         end_date = _format_datetime(end_date)
 
-        query = f"""
-                SELECT {field_string}
-                FROM (
-                    SELECT {field_string},
-                    ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
-                    FROM {from_expression} t1
-                    WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
-                ) t2
-                WHERE feast_row_ = 1
-                """
+        @contextlib.contextmanager
+        def query_generator() -> Tuple[List[str], List[str]]:
+            try:
+                query = f"""
+                        SELECT {field_string}
+                        FROM (
+                            SELECT {field_string},
+                            ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
+                            FROM {from_expression} t1
+                            WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
+                        ) t2
+                        WHERE feast_row_ = 1
+                        """
+                yield [query], join_key_columns + feature_name_columns + timestamps
+            finally:
+                pass
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(conn, query)
+        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=False, on_demand_feature_views=None)
 
     @staticmethod
     def get_historical_features(
@@ -188,7 +194,7 @@ class HiveOfflineStore(OfflineStore):
         final_feature_names = None
 
         @contextlib.contextmanager
-        def query_generator() -> Tuple[Iterator[List[str]], Iterator[str]]:
+        def query_generator() -> Tuple[List[str], List[str]]:
             table_name = offline_utils.get_temp_entity_table_name()
 
             try:
@@ -247,7 +253,7 @@ class HiveRetrievalJob(RetrievalJob):
     def __init__(
         self,
         conn: HiveConnection,
-        queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
+        queries: ContextManager,
         config: RepoConfig,
         full_feature_names: bool,
         on_demand_feature_views: Optional[List[OnDemandFeatureView]],
@@ -259,7 +265,7 @@ class HiveRetrievalJob(RetrievalJob):
         if callable(queries):
             self._queries_generator = queries
         else:
-            assert False
+            raise TypeError("queries should be a context manager yielding (list[queries], list[final_features_names])")
         # else:
         #     if isinstance(queries, str):
         #         queries = [queries]
