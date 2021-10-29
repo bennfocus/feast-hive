@@ -82,6 +82,9 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     kerberos_service_name: StrictStr = "impala"
     """ Specify particular impalad service principal. """
 
+    use_unique_field_names: StrictBool = False
+    """ Use unique field names in db (i.e. `tablename.fieldname` instead of `fieldname`)"""
+
 
 class HiveConnection:
     def __init__(self, store_config: HiveOfflineStoreConfig):
@@ -89,7 +92,7 @@ class HiveConnection:
         self._store_config = store_config
         self._real_conn = impala_connect(
             **store_config.dict(
-                exclude={"type", "entity_uploading_chunk_size", "hive_conf"}
+                exclude={"type", "entity_uploading_chunk_size", "hive_conf", "use_unique_field_names"}
             )
         )
 
@@ -105,6 +108,10 @@ class HiveConnection:
             return self.real_conn.cursor(configuration=self._store_config.hive_conf)
         else:
             return self.real_conn.cursor()
+
+    @property
+    def use_unique_field_names(self) -> bool:
+        return self._store_config.use_unique_field_names
 
     def __enter__(self):
         return self
@@ -302,7 +309,8 @@ class HiveRetrievalJob(RetrievalJob):
         with self._queries_generator() as (queries, final_feature_names):
             # print(final_feature_names)
             with self._conn.cursor() as cursor:
-                cursor.execute("SET hive.resultset.use.unique.column.names=false")
+                if not self._conn.use_unique_field_names:
+                    cursor.execute("SET hive.resultset.use.unique.column.names=false")
 
                 for query in queries:
                     # print("-----")

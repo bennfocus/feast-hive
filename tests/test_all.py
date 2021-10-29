@@ -62,17 +62,17 @@ def get_options_from_pytestconfig(pytestconfig,) -> Dict[str, Any]:
 @pytest.fixture()
 def hive_conn_info(pytestconfig):
     options = get_options_from_pytestconfig(pytestconfig)
-    offline_store = HiveOfflineStoreConfig(**options)
-    conn = feast_hive_module.HiveConnection(offline_store)
+    offline_store_config = HiveOfflineStoreConfig(**options)
+    conn = feast_hive_module.HiveConnection(offline_store_config)
 
-    yield offline_store, conn, options
+    yield offline_store_config, conn, options
 
     conn.close()
 
 
 @contextlib.contextmanager
 def prep_hive_fs_and_fv(
-    offline_store, conn, source_type: str,
+    offline_store_config, conn, source_type: str,
 ) -> Iterator[Tuple[FeatureStore, FeatureView]]:
     df = feast_tests_funcs.create_dataset()
     table_name = f"test_ingestion_{source_type}_correctness_{int(time.time_ns())}_{random.randint(1000, 9999)}"
@@ -84,10 +84,9 @@ def prep_hive_fs_and_fv(
         hive_source = HiveSource(
             table=table_name if source_type == "table" else None,
             query=f"SELECT * FROM {table_name}" if source_type == "query" else None,
-            event_timestamp_column="ts",
+            event_timestamp_column="event_timestamp",
             created_timestamp_column="created_ts",
             date_partition_column="",
-            field_mapping={"ts_1": "ts", "id": "driver_id"},
         )
 
         fv = feast_tests_funcs.correctness_feature_view(hive_source)
@@ -104,7 +103,7 @@ def prep_hive_fs_and_fv(
             online_store=SqliteOnlineStoreConfig(
                 path=str(Path(data_dir_name) / "online_store.db")
             ),
-            offline_store=offline_store,
+            offline_store=offline_store_config,
         )
         fs = FeatureStore(config=config)
         fs.apply([fv, e])
@@ -181,7 +180,7 @@ def test_hive_source(hive_conn_info):
         assert expected_schema == schema1
 
         # Test query
-        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100", unique_field_names=False)
+        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100")
         schema2 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema2
 

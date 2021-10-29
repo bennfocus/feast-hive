@@ -13,10 +13,9 @@ class HiveOptions:
     DataSource Hive options used to source features from Hive
     """
 
-    def __init__(self, table: Optional[str], query: Optional[str], unique_field_names: bool=True):
+    def __init__(self, table: Optional[str], query: Optional[str]):
         self._table = table
         self._query = query
-        self._unique_field_names = unique_field_names
 
     @property
     def query(self):
@@ -45,18 +44,6 @@ class HiveOptions:
         Sets the table ref of this data source
         """
         self._table = table
-
-    @property
-    def unique_field_names(self) -> bool:
-        """
-        Returns:
-            bool: whether to use unique field names (i.e. `tablename.fieldname` instead of just `fieldname` in result)
-        """
-        return self._unique_field_names
-
-    @unique_field_names.setter
-    def unique_table_names(self, new_val: bool):
-        self._unique_field_names = new_val
 
     @classmethod
     def from_proto(cls, hive_options_proto: DataSourceProto.CustomSourceOptions):
@@ -99,7 +86,6 @@ class HiveSource(DataSource):
         created_timestamp_column: Optional[str] = "",
         field_mapping: Optional[Dict[str, str]] = None,
         date_partition_column: Optional[str] = "",
-        unique_field_names: bool = True
     ):
         assert (
             table is not None or query is not None
@@ -112,7 +98,7 @@ class HiveSource(DataSource):
             date_partition_column,
         )
 
-        self._hive_options = HiveOptions(table=table, query=query, unique_field_names=unique_field_names)
+        self._hive_options = HiveOptions(table=table, query=query)
 
     def __eq__(self, other):
         if not isinstance(other, HiveSource):
@@ -121,7 +107,6 @@ class HiveSource(DataSource):
         return (
             self.hive_options.table == other.hive_options.table
             and self.hive_options.query == other.hive_options.query
-            and self.hive_options._unique_field_names == self.hive_options._unique_field_names
             and self.event_timestamp_column == other.event_timestamp_column
             and self.created_timestamp_column == other.created_timestamp_column
             and self.field_mapping == other.field_mapping
@@ -215,7 +200,7 @@ class HiveSource(DataSource):
 
                 else:
                     try:
-                        if not self.hive_options.unique_field_names:
+                        if not conn.use_unique_field_names:
                             cursor.execute("SET hive.resultset.use.unique.column.names=false")
                         cursor.execute(f"SELECT * FROM ({self.query}) AS t LIMIT 1")
                         if not cursor.fetchone():
