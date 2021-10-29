@@ -253,9 +253,10 @@ class HiveRetrievalJob(RetrievalJob):
     def __init__(
         self,
         conn: HiveConnection,
-        queries: ContextManager,
+        queries: Union[ContextManager, List[str], str],
         config: RepoConfig,
         full_feature_names: bool,
+        final_feature_names: Optional[Iterable[str]],
         on_demand_feature_views: Optional[List[OnDemandFeatureView]],
     ):
         assert (
@@ -264,17 +265,21 @@ class HiveRetrievalJob(RetrievalJob):
 
         if callable(queries):
             self._queries_generator = queries
-        else:
-            raise TypeError("queries should be a context manager yielding (list[queries], list[final_features_names])")
         # else:
-        #     if isinstance(queries, str):
-        #         queries = [queries]
-        #
-        #     @contextlib.contextmanager
-        #     def query_generator() -> Iterator[List[str]]:
-        #         yield queries
-        #
-        #     self._queries_generator = query_generator
+            #
+        elif isinstance(queries, str):
+            queries = [queries]
+        elif isinstance(queries, Iterable):
+            queries = list(queries)
+        else:
+            raise TypeError("queries should be a context manager yielding (list[queries], list[final_features_names])"
+                            "or list[str] or str (final_feature_names should be provided in that case)")
+
+        @contextlib.contextmanager
+        def query_generator() -> Iterator[List[str]]:
+            yield queries, final_feature_names
+
+        self._queries_generator = query_generator
 
         self._conn = conn
         self.config = config

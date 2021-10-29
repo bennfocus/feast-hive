@@ -116,13 +116,14 @@ def prep_hive_fs_and_fv(
 
 def test_empty_result(hive_conn_info):
     offline_store, conn, _ = hive_conn_info
-
-    empty_df = pd.DataFrame(columns=["a", "b", "c"], dtype=np.int32)
+    cols = ["a", "b", "c"]
+    empty_df = pd.DataFrame(columns=cols, dtype=np.int32)
     table_name = f"test_empty_result_{int(time.time_ns())}_{random.randint(1000, 9999)}"
 
     with temporarily_upload_df_to_hive(conn, table_name, empty_df):
         sql_df_job = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name}"
+            conn, f"SELECT * FROM {table_name}", full_feature_names=False, config=None, final_feature_names=cols,
+            on_demand_feature_views=None
         )
         sql_df = sql_df_job.to_df()
         assert sorted(sql_df.columns) == sorted(empty_df.columns)
