@@ -176,7 +176,8 @@ class HiveOfflineStore(OfflineStore):
                 pass
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=False, on_demand_feature_views=None)
+        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=False, on_demand_feature_views=None,
+                                final_feature_names=None)
 
     @staticmethod
     def get_historical_features(
@@ -246,7 +247,7 @@ class HiveOfflineStore(OfflineStore):
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=full_feature_names,
-                                on_demand_feature_views=None)
+                                on_demand_feature_views=None, final_feature_names=None)
 
 
 class HiveRetrievalJob(RetrievalJob):
@@ -265,21 +266,21 @@ class HiveRetrievalJob(RetrievalJob):
 
         if callable(queries):
             self._queries_generator = queries
-        # else:
-            #
-        elif isinstance(queries, str):
-            queries = [queries]
-        elif isinstance(queries, Iterable):
-            queries = list(queries)
         else:
-            raise TypeError("queries should be a context manager yielding (list[queries], list[final_features_names])"
-                            "or list[str] or str (final_feature_names should be provided in that case)")
+            if isinstance(queries, str):
+                queries = [queries]
+            elif isinstance(queries, Iterable):
+                queries = list(queries)
+            else:
+                raise TypeError("queries should be a context manager yielding "
+                                "(list[queries], list[final_features_names])"
+                                "or list[str] or str (final_feature_names should be provided in that case)")
 
-        @contextlib.contextmanager
-        def query_generator() -> Iterator[List[str]]:
-            yield queries, final_feature_names
+            @contextlib.contextmanager
+            def query_generator() -> Iterator[List[str]]:
+                yield queries, final_feature_names
 
-        self._queries_generator = query_generator
+            self._queries_generator = query_generator
 
         self._conn = conn
         self.config = config
@@ -301,6 +302,8 @@ class HiveRetrievalJob(RetrievalJob):
         with self._queries_generator() as (queries, final_feature_names):
             # print(final_feature_names)
             with self._conn.cursor() as cursor:
+                cursor.execute("SET hive.resultset.use.unique.column.names=false")
+
                 for query in queries:
                     # print("-----")
                     # print(query)
@@ -373,7 +376,8 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} LIMIT 1"
+            conn, f"SELECT * FROM {table_name} LIMIT 1", config=config, full_feature_names=False,
+            final_feature_names=None, on_demand_feature_views=None
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:

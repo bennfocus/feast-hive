@@ -181,7 +181,7 @@ def test_hive_source(hive_conn_info):
         assert expected_schema == schema1
 
         # Test query
-        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100")
+        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100", unique_field_names=False)
         schema2 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema2
 
@@ -194,7 +194,8 @@ def test_upload_entity_df(hive_conn_info):
     orders_table = f"test_upload_entity_df_orders_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, orders_table, orders_df):
         orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {orders_table}"
+            conn, f"SELECT * FROM {orders_table}", config=None, full_feature_names=None, on_demand_feature_views=None,
+            final_feature_names=orders_df.columns
         ).to_df()
 
         assert sorted(orders_df.columns) == sorted(orders_df_from_sql.columns)
@@ -230,7 +231,8 @@ def test_upload_abnormal_df(hive_conn_info):
     df1_table = f"test_upload_abnormal_df_df1_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, df1_table, df1):
         df1_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {df1_table}"
+            conn, f"SELECT * FROM {df1_table}", config=None, full_feature_names=False, on_demand_feature_views=None,
+            final_feature_names=df1.columns
         ).to_df()
 
         assert sorted(df1.columns) == sorted(df1_from_sql.columns)
