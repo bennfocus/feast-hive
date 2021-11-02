@@ -201,7 +201,9 @@ class HiveSource(DataSource):
                 else:
                     try:
                         if not conn.use_unique_field_names:
-                            cursor.execute("SET hive.resultset.use.unique.column.names=false")
+                            cursor.execute(
+                                "SET hive.resultset.use.unique.column.names=false"
+                            )
                         cursor.execute(f"SELECT * FROM ({self.query}) AS t LIMIT 1")
                         if not cursor.fetchone():
                             raise DataSourceNotFoundException(self.query)

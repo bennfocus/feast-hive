@@ -121,8 +121,12 @@ def test_empty_result(hive_conn_info):
 
     with temporarily_upload_df_to_hive(conn, table_name, empty_df):
         sql_df_job = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name}", full_feature_names=False, config=None, final_feature_names=cols,
-            on_demand_feature_views=None
+            conn,
+            f"SELECT * FROM {table_name}",
+            full_feature_names=False,
+            config=None,
+            final_feature_names=cols,
+            on_demand_feature_views=None,
         )
         sql_df = sql_df_job.to_df()
         assert sorted(sql_df.columns) == sorted(empty_df.columns)
@@ -193,8 +197,12 @@ def test_upload_entity_df(hive_conn_info):
     orders_table = f"test_upload_entity_df_orders_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, orders_table, orders_df):
         orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {orders_table}", config=None, full_feature_names=None, on_demand_feature_views=None,
-            final_feature_names=orders_df.columns
+            conn,
+            f"SELECT * FROM {orders_table}",
+            config=None,
+            full_feature_names=None,
+            on_demand_feature_views=None,
+            final_feature_names=orders_df.columns,
         ).to_df()
 
         assert sorted(orders_df.columns) == sorted(orders_df_from_sql.columns)
@@ -230,8 +238,12 @@ def test_upload_abnormal_df(hive_conn_info):
     df1_table = f"test_upload_abnormal_df_df1_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, df1_table, df1):
         df1_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {df1_table}", config=None, full_feature_names=False, on_demand_feature_views=None,
-            final_feature_names=df1.columns
+            conn,
+            f"SELECT * FROM {df1_table}",
+            config=None,
+            full_feature_names=False,
+            on_demand_feature_views=None,
+            final_feature_names=df1.columns,
         ).to_df()
 
         assert sorted(df1.columns) == sorted(df1_from_sql.columns)

@@ -1,6 +1,16 @@
 import contextlib
 from datetime import datetime
-from typing import Callable, ContextManager, Dict, Iterator, List, Optional, Union, Iterable, Tuple
+from typing import (
+    Callable,
+    ContextManager,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
@@ -14,11 +24,9 @@ from feast.data_source import DataSource
 from feast.errors import InvalidEntityType
 from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
+from feast.on_demand_feature_view import OnDemandFeatureView
 from feast.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
-from feast.on_demand_feature_view import OnDemandFeatureView
-
-
 from feast_hive.hive_source import HiveSource
 from feast_hive.hive_type_map import hive_to_pa_value_type, pa_to_hive_value_type
 
@@ -92,7 +100,12 @@ class HiveConnection:
         self._store_config = store_config
         self._real_conn = impala_connect(
             **store_config.dict(
-                exclude={"type", "entity_uploading_chunk_size", "hive_conf", "use_unique_field_names"}
+                exclude={
+                    "type",
+                    "entity_uploading_chunk_size",
+                    "hive_conf",
+                    "use_unique_field_names",
+                }
             )
         )
 
@@ -122,7 +135,9 @@ class HiveConnection:
             reraise(exc_type, exc_val, exc_tb)
 
 
-def list_final_feature_names(entity_df_columns, feature_view_query_contexts, full_feature_names) -> List[str]:
+def list_final_feature_names(
+    entity_df_columns, feature_view_query_contexts, full_feature_names
+) -> List[str]:
     final_output_feature_names = list(entity_df_columns)
     final_output_feature_names.extend(
         [
@@ -183,8 +198,14 @@ class HiveOfflineStore(OfflineStore):
                 pass
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=False, on_demand_feature_views=None,
-                                final_feature_names=None)
+        return HiveRetrievalJob(
+            conn,
+            query_generator,
+            config=config,
+            full_feature_names=False,
+            on_demand_feature_views=None,
+            final_feature_names=None,
+        )
 
     @staticmethod
     def get_historical_features(
@@ -227,8 +248,10 @@ class HiveOfflineStore(OfflineStore):
                 )
 
                 final_feature_names = list_final_feature_names(
-                    entity_df_columns=entity_schema.keys(), feature_view_query_contexts=query_contexts,
-                    full_feature_names=full_feature_names)
+                    entity_df_columns=entity_schema.keys(),
+                    feature_view_query_contexts=query_contexts,
+                    full_feature_names=full_feature_names,
+                )
 
                 rendered_query = offline_utils.build_point_in_time_query(
                     query_contexts,
@@ -253,8 +276,14 @@ class HiveOfflineStore(OfflineStore):
                 with conn.cursor() as cursor:
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
-        return HiveRetrievalJob(conn, query_generator, config=config, full_feature_names=full_feature_names,
-                                on_demand_feature_views=None, final_feature_names=None)
+        return HiveRetrievalJob(
+            conn,
+            query_generator,
+            config=config,
+            full_feature_names=full_feature_names,
+            on_demand_feature_views=None,
+            final_feature_names=None,
+        )
 
 
 class HiveRetrievalJob(RetrievalJob):
@@ -279,9 +308,11 @@ class HiveRetrievalJob(RetrievalJob):
             elif isinstance(queries, Iterable):
                 queries = list(queries)
             else:
-                raise TypeError("queries should be a context manager yielding "
-                                "(list[queries], list[final_features_names])"
-                                "or list[str] or str (final_feature_names should be provided in that case)")
+                raise TypeError(
+                    "queries should be a context manager yielding "
+                    "(list[queries], list[final_features_names])"
+                    "or list[str] or str (final_feature_names should be provided in that case)"
+                )
 
             @contextlib.contextmanager
             def query_generator() -> Iterator[List[str]]:
@@ -326,8 +357,12 @@ class HiveRetrievalJob(RetrievalJob):
                     )
                 else:
                     schema = pa.schema(
-                        [(final_name, hive_to_pa_value_type(field[1]))
-                         for (field, final_name) in zip(cursor.description, final_feature_names)]
+                        [
+                            (final_name, hive_to_pa_value_type(field[1]))
+                            for (field, final_name) in zip(
+                                cursor.description, final_feature_names
+                            )
+                        ]
                     )
                 pa_batches = [
                     HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b, schema)
@@ -384,8 +419,12 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} LIMIT 1", config=config, full_feature_names=False,
-            final_feature_names=None, on_demand_feature_views=None
+            conn,
+            f"SELECT * FROM {table_name} LIMIT 1",
+            config=config,
+            full_feature_names=False,
+            final_feature_names=None,
+            on_demand_feature_views=None,
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:

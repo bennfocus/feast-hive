@@ -371,7 +371,13 @@ def create_dataset() -> pd.DataFrame:
     now = datetime.utcnow()
     ts = pd.Timestamp(now).round("ms")
     data = {
-        "driver_id": [1, 2, 1, 3, 3],  # FIXME: id and field mapping in entity fields are not compatible???
+        "driver_id": [
+            1,
+            2,
+            1,
+            3,
+            3,
+        ],  # FIXME: id and field mapping in entity fields are not compatible???
         "value": [0.1, None, 0.3, 4, 5],
         "event_timestamp": [  # FIXME: timestamps fields cannot be used for field)mapping in Feast Datasource API now=(
             ts - timedelta(hours=4),
