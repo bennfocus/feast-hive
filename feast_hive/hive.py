@@ -257,7 +257,7 @@ class HiveOfflineStore(OfflineStore):
                     query_contexts,
                     left_table_query_string=table_name,
                     entity_df_event_timestamp_col=entity_df_event_timestamp_col,
-                    entity_df_columns=entity_schema.keys(),
+                    # entity_df_columns=entity_schema.keys(), # FIXME: uncomment this for <master> branch of feast repo
                     query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
                     full_feature_names=full_feature_names,
                 )
