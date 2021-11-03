@@ -42,6 +42,13 @@ except ImportError as e:
     raise FeastExtrasDependencyImportError("hive", str(e))
 
 
+# default Hive settings that can be overridden in offline_store:hive_conf of feature_store.yaml
+OVERRIDABLE_HIVE_SETTINGS = {
+    "hive.strict.checks.cartesian.product": "False",
+    "hive.resultset.use.unique.column.names": "False",
+}
+
+
 class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Offline store config for Hive """
 
@@ -90,8 +97,13 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     kerberos_service_name: StrictStr = "impala"
     """ Specify particular impalad service principal. """
 
-    use_unique_field_names: StrictBool = False
-    """ Use unique field names in db (i.e. `tablename.fieldname` instead of `fieldname`)"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if self.hive_conf is None:
+            self.hive_conf = {}
+        for k, v in OVERRIDABLE_HIVE_SETTINGS.items():
+            self.hive_conf[k] = self.hive_conf.get(k, v)
 
 
 class HiveConnection:
@@ -100,12 +112,7 @@ class HiveConnection:
         self._store_config = store_config
         self._real_conn = impala_connect(
             **store_config.dict(
-                exclude={
-                    "type",
-                    "entity_uploading_chunk_size",
-                    "hive_conf",
-                    "use_unique_field_names",
-                }
+                exclude={"type", "entity_uploading_chunk_size", "hive_conf"}
             )
         )
 
@@ -121,10 +128,6 @@ class HiveConnection:
             return self.real_conn.cursor(configuration=self._store_config.hive_conf)
         else:
             return self.real_conn.cursor()
-
-    @property
-    def use_unique_field_names(self) -> bool:
-        return self._store_config.use_unique_field_names
 
     def __enter__(self):
         return self
@@ -265,7 +268,6 @@ class HiveOfflineStore(OfflineStore):
                 # In order to use `REGEX Column Specification`, need set `hive.support.quoted.identifiers` to None.
                 # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
                 queries = [
-                    "SET hive.strict.checks.cartesian.product=false",
                     "SET hive.support.quoted.identifiers=None",
                     "SET hive.exec.temporary.table.storage=memory",
                 ] + rendered_query.split(";")
@@ -338,14 +340,8 @@ class HiveRetrievalJob(RetrievalJob):
 
     def _to_arrow_internal(self) -> pa.Table:
         with self._queries_generator() as (queries, final_feature_names):
-            # print(final_feature_names)
             with self._conn.cursor() as cursor:
-                if not self._conn.use_unique_field_names:
-                    cursor.execute("SET hive.resultset.use.unique.column.names=false")
-
                 for query in queries:
-                    # print("-----")
-                    # print(query)
                     cursor.execute(query)
                 batches = cursor.fetchcolumnar()
                 if final_feature_names is None:
