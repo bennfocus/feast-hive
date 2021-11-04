@@ -62,17 +62,17 @@ def get_options_from_pytestconfig(pytestconfig,) -> Dict[str, Any]:
 @pytest.fixture()
 def hive_conn_info(pytestconfig):
     options = get_options_from_pytestconfig(pytestconfig)
-    offline_store = HiveOfflineStoreConfig(**options)
-    conn = feast_hive_module.HiveConnection(offline_store)
+    offline_store_config = HiveOfflineStoreConfig(**options)
+    conn = feast_hive_module.HiveConnection(offline_store_config)
 
-    yield offline_store, conn, options
+    yield offline_store_config, conn, options
 
     conn.close()
 
 
 @contextlib.contextmanager
 def prep_hive_fs_and_fv(
-    offline_store, conn, source_type: str,
+    offline_store_config, conn, source_type: str,
 ) -> Iterator[Tuple[FeatureStore, FeatureView]]:
     df = feast_tests_funcs.create_dataset()
     table_name = f"test_ingestion_{source_type}_correctness_{int(time.time_ns())}_{random.randint(1000, 9999)}"
@@ -84,10 +84,9 @@ def prep_hive_fs_and_fv(
         hive_source = HiveSource(
             table=table_name if source_type == "table" else None,
             query=f"SELECT * FROM {table_name}" if source_type == "query" else None,
-            event_timestamp_column="ts",
+            event_timestamp_column="event_timestamp",
             created_timestamp_column="created_ts",
             date_partition_column="",
-            field_mapping={"ts_1": "ts", "id": "driver_id"},
         )
 
         fv = feast_tests_funcs.correctness_feature_view(hive_source)
@@ -104,7 +103,7 @@ def prep_hive_fs_and_fv(
             online_store=SqliteOnlineStoreConfig(
                 path=str(Path(data_dir_name) / "online_store.db")
             ),
-            offline_store=offline_store,
+            offline_store=offline_store_config,
         )
         fs = FeatureStore(config=config)
         fs.apply([fv, e])
@@ -116,13 +115,18 @@ def prep_hive_fs_and_fv(
 
 def test_empty_result(hive_conn_info):
     offline_store, conn, _ = hive_conn_info
-
-    empty_df = pd.DataFrame(columns=["a", "b", "c"], dtype=np.int32)
+    cols = ["a", "b", "c"]
+    empty_df = pd.DataFrame(columns=cols, dtype=np.int32)
     table_name = f"test_empty_result_{int(time.time_ns())}_{random.randint(1000, 9999)}"
 
     with temporarily_upload_df_to_hive(conn, table_name, empty_df):
         sql_df_job = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name}"
+            conn,
+            f"SELECT * FROM {table_name}",
+            full_feature_names=False,
+            config=None,
+            final_feature_names=cols,
+            on_demand_feature_views=None,
         )
         sql_df = sql_df_job.to_df()
         assert sorted(sql_df.columns) == sorted(empty_df.columns)
@@ -193,7 +197,12 @@ def test_upload_entity_df(hive_conn_info):
     orders_table = f"test_upload_entity_df_orders_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, orders_table, orders_df):
         orders_df_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {orders_table}"
+            conn,
+            f"SELECT * FROM {orders_table}",
+            config=None,
+            full_feature_names=None,
+            on_demand_feature_views=None,
+            final_feature_names=orders_df.columns,
         ).to_df()
 
         assert sorted(orders_df.columns) == sorted(orders_df_from_sql.columns)
@@ -229,7 +238,12 @@ def test_upload_abnormal_df(hive_conn_info):
     df1_table = f"test_upload_abnormal_df_df1_{int(time.time_ns())}_{random.randint(1000, 9999)}"
     with temporarily_upload_df_to_hive(conn, df1_table, df1):
         df1_from_sql = feast_hive_module.HiveRetrievalJob(
-            conn, f"SELECT * FROM {df1_table}"
+            conn,
+            f"SELECT * FROM {df1_table}",
+            config=None,
+            full_feature_names=False,
+            on_demand_feature_views=None,
+            final_feature_names=df1.columns,
         ).to_df()
 
         assert sorted(df1.columns) == sorted(df1_from_sql.columns)

@@ -1,6 +1,6 @@
 DEFAULT_HS2_HOST = "localhost"
 DEFAULT_HS2_PORT = 10000
-DEFAULT_DATABASE = "default"
+DEFAULT_DATABASE = "driver_tutorial"
 
 
 def pytest_addoption(parser):
