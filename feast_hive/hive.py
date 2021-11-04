@@ -1,6 +1,7 @@
 import contextlib
 from datetime import datetime
 from typing import (
+    Any,
     Callable,
     ContextManager,
     Dict,
@@ -43,7 +44,7 @@ except ImportError as e:
 
 
 # default Hive settings that can be overridden in offline_store:hive_conf of feature_store.yaml
-OVERRIDABLE_HIVE_SETTINGS = {
+DEFAULT_HIVE_CONF = {
     "hive.strict.checks.cartesian.product": "False",
     "hive.resultset.use.unique.column.names": "False",
 }
@@ -97,13 +98,13 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     kerberos_service_name: StrictStr = "impala"
     """ Specify particular impalad service principal. """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **data: Any):
+        if "hive_conf" in data and type(data["hive_conf"]) == dict:
+            _hive_conf = DEFAULT_HIVE_CONF
+            _hive_conf.update(data["hive_conf"])
+            data["hive_conf"] = _hive_conf
 
-        if self.hive_conf is None:
-            self.hive_conf = {}
-        for k, v in OVERRIDABLE_HIVE_SETTINGS.items():
-            self.hive_conf[k] = self.hive_conf.get(k, v)
+        super().__init__(**data)
 
 
 class HiveConnection:
@@ -136,20 +137,6 @@ class HiveConnection:
         self.close()
         if exc_type is not None:
             reraise(exc_type, exc_val, exc_tb)
-
-
-def list_final_feature_names(
-    entity_df_columns, feature_view_query_contexts, full_feature_names
-) -> List[str]:
-    final_output_feature_names = list(entity_df_columns)
-    final_output_feature_names.extend(
-        [
-            (f"{fv.name}__{feature}" if full_feature_names else feature)
-            for fv in feature_view_query_contexts
-            for feature in fv.features
-        ]
-    )
-    return final_output_feature_names
 
 
 class HiveOfflineStore(OfflineStore):
@@ -201,14 +188,7 @@ class HiveOfflineStore(OfflineStore):
                 pass
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(
-            conn,
-            query_generator,
-            config=config,
-            full_feature_names=False,
-            on_demand_feature_views=None,
-            final_feature_names=None,
-        )
+        return HiveRetrievalJob(conn, query_generator, config=config,)
 
     @staticmethod
     def get_historical_features(
@@ -222,8 +202,6 @@ class HiveOfflineStore(OfflineStore):
     ) -> RetrievalJob:
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
         conn = HiveConnection(config.offline_store)
-
-        final_feature_names = None
 
         @contextlib.contextmanager
         def query_generator() -> Tuple[List[str], List[str]]:
@@ -250,7 +228,7 @@ class HiveOfflineStore(OfflineStore):
                     feature_refs, feature_views, registry, project,
                 )
 
-                final_feature_names = list_final_feature_names(
+                final_feature_names = _list_final_feature_names(
                     entity_df_columns=entity_schema.keys(),
                     feature_view_query_contexts=query_contexts,
                     full_feature_names=full_feature_names,
@@ -279,12 +257,7 @@ class HiveOfflineStore(OfflineStore):
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         return HiveRetrievalJob(
-            conn,
-            query_generator,
-            config=config,
-            full_feature_names=full_feature_names,
-            on_demand_feature_views=None,
-            final_feature_names=None,
+            conn, query_generator, config=config, full_feature_names=full_feature_names,
         )
 
 
@@ -292,11 +265,11 @@ class HiveRetrievalJob(RetrievalJob):
     def __init__(
         self,
         conn: HiveConnection,
-        queries: Union[ContextManager, List[str], str],
+        queries: Union[ContextManager[], List[str], str],
         config: RepoConfig,
-        full_feature_names: bool,
-        final_feature_names: Optional[Iterable[str]],
-        on_demand_feature_views: Optional[List[OnDemandFeatureView]],
+        full_feature_names: bool = False,
+        final_feature_names: Optional[Iterable[str]] = None,
+        on_demand_feature_views: Optional[List[OnDemandFeatureView]] = None,
     ):
         assert (
             isinstance(queries, str) or isinstance(queries, list) or callable(queries)
@@ -415,12 +388,7 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn,
-            f"SELECT * FROM {table_name} LIMIT 1",
-            config=config,
-            full_feature_names=False,
-            final_feature_names=None,
-            on_demand_feature_views=None,
+            conn, f"SELECT * FROM {table_name} LIMIT 1", config=config
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
@@ -494,6 +462,20 @@ def _upload_entity_df_by_insert(
                 VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
             """
             cursor.execute(entity_chunk_insert_sql)
+
+
+def _list_final_feature_names(
+    entity_df_columns, feature_view_query_contexts, full_feature_names
+) -> List[str]:
+    final_output_feature_names = list(entity_df_columns)
+    final_output_feature_names.extend(
+        [
+            (f"{fv.name}__{feature}" if full_feature_names else feature)
+            for fv in feature_view_query_contexts
+            for feature in fv.features
+        ]
+    )
+    return final_output_feature_names
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
