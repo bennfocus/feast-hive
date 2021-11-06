@@ -291,7 +291,7 @@ class HiveRetrievalJob(RetrievalJob):
         return self._on_demand_feature_views
 
     def _to_df_internal(self) -> pd.DataFrame:
-        return self.to_arrow().to_pandas()
+        return self._to_arrow_internal().to_pandas()
 
     def _to_arrow_internal(self) -> pa.Table:
         with self._queries_generator() as queries:
