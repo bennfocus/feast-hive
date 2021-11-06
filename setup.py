@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as f:
     readme = f.read()
 
 INSTALL_REQUIRE = [
-    "feast>=0.12.0",
+    "feast>=0.14.0",
     "impyla[kerberos]>=0.15.0",
 ]
 
@@ -21,7 +21,7 @@ DEV_REQUIRE = [
 
 setup(
     name="feast-hive",
-    version="0.1.2",
+    version="0.14.0",
     author="Benn Ma",
     author_email="bennmsg@gmail.com",
     description="Hive support for Feast offline store",
