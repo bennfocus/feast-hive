@@ -23,6 +23,7 @@ from six import reraise
 from feast import FeatureView
 from feast.data_source import DataSource
 from feast.errors import InvalidEntityType
+from feast.feature_view import DUMMY_ENTITY_ID, DUMMY_ENTITY_VAL
 from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
 from feast.on_demand_feature_view import OnDemandFeatureView
@@ -45,8 +46,7 @@ except ImportError as e:
 
 # default Hive settings that can be overridden in offline_store:hive_conf of feature_store.yaml
 DEFAULT_HIVE_CONF = {
-    "hive.strict.checks.cartesian.product": "False",
-    "hive.resultset.use.unique.column.names": "False",
+    "hive.strict.checks.cartesian.product": "false",
 }
 
 
@@ -170,25 +170,24 @@ class HiveOfflineStore(OfflineStore):
         start_date = _format_datetime(start_date)
         end_date = _format_datetime(end_date)
 
-        @contextlib.contextmanager
-        def query_generator() -> Tuple[List[str], List[str]]:
-            try:
-                query = f"""
-                        SELECT {field_string}
-                        FROM (
-                            SELECT {field_string},
-                            ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
-                            FROM {from_expression} t1
-                            WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
-                        ) t2
-                        WHERE feast_row_ = 1
-                        """
-                yield [query], join_key_columns + feature_name_columns + timestamps
-            finally:
-                pass
+        queries = [
+            "SET hive.resultset.use.unique.column.names=false",
+            f"""
+            SELECT 
+                {field_string}
+                {f", {repr(DUMMY_ENTITY_VAL)} AS {DUMMY_ENTITY_ID}" if not join_key_columns else ""}
+            FROM (
+                SELECT {field_string},
+                ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
+                FROM {from_expression} t1
+                WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
+            ) t2
+            WHERE feast_row_ = 1
+            """,
+        ]
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(conn, query_generator, config=config,)
+        return HiveRetrievalJob(conn, queries, config=config,)
 
     @staticmethod
     def get_historical_features(
@@ -204,7 +203,7 @@ class HiveOfflineStore(OfflineStore):
         conn = HiveConnection(config.offline_store)
 
         @contextlib.contextmanager
-        def query_generator() -> Tuple[List[str], List[str]]:
+        def query_generator() -> ContextManager[List[str]]:
             table_name = offline_utils.get_temp_entity_table_name()
 
             try:
@@ -228,12 +227,6 @@ class HiveOfflineStore(OfflineStore):
                     feature_refs, feature_views, registry, project,
                 )
 
-                final_feature_names = _list_final_feature_names(
-                    entity_df_columns=entity_schema.keys(),
-                    feature_view_query_contexts=query_contexts,
-                    full_feature_names=full_feature_names,
-                )
-
                 rendered_query = offline_utils.build_point_in_time_query(
                     query_contexts,
                     left_table_query_string=table_name,
@@ -246,18 +239,25 @@ class HiveOfflineStore(OfflineStore):
                 # In order to use `REGEX Column Specification`, need set `hive.support.quoted.identifiers` to None.
                 # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
                 queries = [
-                    "SET hive.support.quoted.identifiers=None",
+                    "SET hive.support.quoted.identifiers=none",
+                    "SET hive.resultset.use.unique.column.names=false",
                     "SET hive.exec.temporary.table.storage=memory",
                 ] + rendered_query.split(";")
 
-                yield queries, final_feature_names
+                yield queries
 
             finally:
                 with conn.cursor() as cursor:
                     cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         return HiveRetrievalJob(
-            conn, query_generator, config=config, full_feature_names=full_feature_names,
+            conn,
+            query_generator,
+            config=config,
+            full_feature_names=full_feature_names,
+            on_demand_feature_views=OnDemandFeatureView.get_requested_odfvs(
+                feature_refs, project, registry
+            ),
         )
 
 
@@ -265,10 +265,9 @@ class HiveRetrievalJob(RetrievalJob):
     def __init__(
         self,
         conn: HiveConnection,
-        queries: Union[ContextManager[], List[str], str],
+        queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
         config: RepoConfig,
         full_feature_names: bool = False,
-        final_feature_names: Optional[Iterable[str]] = None,
         on_demand_feature_views: Optional[List[OnDemandFeatureView]] = None,
     ):
         assert (
@@ -280,18 +279,15 @@ class HiveRetrievalJob(RetrievalJob):
         else:
             if isinstance(queries, str):
                 queries = [queries]
-            elif isinstance(queries, Iterable):
-                queries = list(queries)
-            else:
+            elif not isinstance(queries, list):
                 raise TypeError(
-                    "queries should be a context manager yielding "
-                    "(list[queries], list[final_features_names])"
-                    "or list[str] or str (final_feature_names should be provided in that case)"
+                    "queries should be a context manager yielding list[queries]"
+                    "or list[str] or str"
                 )
 
             @contextlib.contextmanager
-            def query_generator() -> Iterator[List[str]]:
-                yield queries, final_feature_names
+            def query_generator() -> ContextManager[List[str]]:
+                yield queries
 
             self._queries_generator = query_generator
 
@@ -312,27 +308,17 @@ class HiveRetrievalJob(RetrievalJob):
         return self.to_arrow().to_pandas()
 
     def _to_arrow_internal(self) -> pa.Table:
-        with self._queries_generator() as (queries, final_feature_names):
+        with self._queries_generator() as queries:
             with self._conn.cursor() as cursor:
                 for query in queries:
                     cursor.execute(query)
                 batches = cursor.fetchcolumnar()
-                if final_feature_names is None:
-                    schema = pa.schema(
-                        [
-                            (field[0], hive_to_pa_value_type(field[1]))
-                            for field in cursor.description
-                        ]
-                    )
-                else:
-                    schema = pa.schema(
-                        [
-                            (final_name, hive_to_pa_value_type(field[1]))
-                            for (field, final_name) in zip(
-                                cursor.description, final_feature_names
-                            )
-                        ]
-                    )
+                schema = pa.schema(
+                    [
+                        (field[0], hive_to_pa_value_type(field[1]))
+                        for field in cursor.description
+                    ]
+                )
                 pa_batches = [
                     HiveRetrievalJob._convert_hive_batch_to_arrow_batch(b, schema)
                     for b in batches
@@ -462,20 +448,6 @@ def _upload_entity_df_by_insert(
                 VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
             """
             cursor.execute(entity_chunk_insert_sql)
-
-
-def _list_final_feature_names(
-    entity_df_columns, feature_view_query_contexts, full_feature_names
-) -> List[str]:
-    final_output_feature_names = list(entity_df_columns)
-    final_output_feature_names.extend(
-        [
-            (f"{fv.name}__{feature}" if full_feature_names else feature)
-            for fv in feature_view_query_contexts
-            for feature in fv.features
-        ]
-    )
-    return final_output_feature_names
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
