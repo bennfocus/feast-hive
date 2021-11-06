@@ -1,17 +1,6 @@
 import contextlib
 from datetime import datetime
-from typing import (
-    Any,
-    Callable,
-    ContextManager,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, ContextManager, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -187,7 +176,7 @@ class HiveOfflineStore(OfflineStore):
         ]
 
         conn = HiveConnection(config.offline_store)
-        return HiveRetrievalJob(conn, queries, config=config,)
+        return HiveRetrievalJob(conn, queries)
 
     @staticmethod
     def get_historical_features(
@@ -253,7 +242,6 @@ class HiveOfflineStore(OfflineStore):
         return HiveRetrievalJob(
             conn,
             query_generator,
-            config=config,
             full_feature_names=full_feature_names,
             on_demand_feature_views=OnDemandFeatureView.get_requested_odfvs(
                 feature_refs, project, registry
@@ -266,7 +254,6 @@ class HiveRetrievalJob(RetrievalJob):
         self,
         conn: HiveConnection,
         queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
-        config: RepoConfig,
         full_feature_names: bool = False,
         on_demand_feature_views: Optional[List[OnDemandFeatureView]] = None,
     ):
@@ -292,7 +279,6 @@ class HiveRetrievalJob(RetrievalJob):
             self._queries_generator = query_generator
 
         self._conn = conn
-        self.config = config
         self._full_feature_names = full_feature_names
         self._on_demand_feature_views = on_demand_feature_views
 
@@ -374,7 +360,7 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} LIMIT 1", config=config
+            conn, f"SELECT * FROM {table_name} LIMIT 1"
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
