@@ -88,10 +88,12 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     """ Specify particular impalad service principal. """
 
     def __init__(self, **data: Any):
-        if "hive_conf" in data and type(data["hive_conf"]) == dict:
-            _hive_conf = DEFAULT_HIVE_CONF
-            _hive_conf.update(data["hive_conf"])
-            data["hive_conf"] = _hive_conf
+        if "hive_conf" not in data:
+            data["hive_conf"] = DEFAULT_HIVE_CONF.copy()
+        elif type(data["hive_conf"]) == dict:
+            data["hive_conf"] = dict(list(DEFAULT_HIVE_CONF.items()) + list(data["hive_conf"].items()))
+        else:
+            raise TypeError("hive_conf should be a dictionary!")
 
         super().__init__(**data)
 
