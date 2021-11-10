@@ -5,10 +5,11 @@ For more details, can check [this Feast issue](https://github.com/feast-dev/feas
 
 **The public releases have passed all integration tests, please create an issue if you got any problem.**
 
-## Todo List
-- [DONE, v0.1.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
-- [DONE, v0.1.2] ~~Allow custom hive conf when connect to a HiveServer2~~ 
-- It currently supports `insert into` for uploading entity_df, which is a little inefficient, gonna add extra parameters for people who are able to provide HDFS address in next version (for uploading to HDFS). 
+## Change Logs
+- DONE [v0.1.1] ~~I am working on the first workable version, think it will be released in a couple of days.~~
+- DONE [v0.1.2] ~~Allow custom hive conf when connect to a HiveServer2~~
+- DONE [v0.14.0] ~~Support Feast 0.14.x~~
+- TODO It currently supports `insert into` for uploading entity_df, which is a little inefficient, gonna add extra parameters for people who are able to provide HDFS address in next version (for uploading to HDFS). 
 
 ## Quickstart
 
