@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as f:
     readme = f.read()
 
 INSTALL_REQUIRE = [
-    "feast>=0.14.0",
+    "feast>=0.16.0",
     "impyla[kerberos]>=0.15.0",
 ]
 
