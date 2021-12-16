@@ -222,7 +222,7 @@ class HiveOfflineStore(OfflineStore):
                     query_contexts,
                     left_table_query_string=table_name,
                     entity_df_event_timestamp_col=entity_df_event_timestamp_col,
-                    # entity_df_columns=entity_schema.keys(), # FIXME: uncomment this for <master> branch of feast repo
+                    entity_df_columns=entity_schema.keys(),
                     query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
                     full_feature_names=full_feature_names,
                 )
@@ -230,6 +230,7 @@ class HiveOfflineStore(OfflineStore):
                 # In order to use `REGEX Column Specification`, need set `hive.support.quoted.identifiers` to None.
                 # Can study more here: https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Select
                 queries = [
+                    "SET hive.mapred.mode=nonstrict",
                     "SET hive.support.quoted.identifiers=none",
                     "SET hive.resultset.use.unique.column.names=false",
                     "SET hive.exec.temporary.table.storage=memory",
@@ -362,7 +363,11 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, f"SELECT * FROM {table_name} LIMIT 1"
+            conn, 
+            [
+                "SET hive.resultset.use.unique.column.names=false",
+                f"SELECT * FROM {table_name} LIMIT 1"
+            ]
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
