@@ -1,10 +1,11 @@
 import contextlib
 from datetime import datetime
-from typing import Any, Callable, ContextManager, Dict, List, Optional, Union
+from typing import Any, Callable, ContextManager, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+from dateutil import parser
 from pydantic import StrictBool, StrictInt, StrictStr
 from pytz import utc
 from six import reraise
@@ -91,7 +92,9 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
         if "hive_conf" not in data:
             data["hive_conf"] = DEFAULT_HIVE_CONF.copy()
         elif type(data["hive_conf"]) == dict:
-            data["hive_conf"] = dict(list(DEFAULT_HIVE_CONF.items()) + list(data["hive_conf"].items()))
+            data["hive_conf"] = dict(
+                list(DEFAULT_HIVE_CONF.items()) + list(data["hive_conf"].items())
+            )
         else:
             raise TypeError("hive_conf should be a dictionary!")
 
@@ -214,8 +217,16 @@ class HiveOfflineStore(OfflineStore):
                     entity_schema, expected_join_keys, entity_df_event_timestamp_col
                 )
 
+                entity_df_event_timestamp_range = _get_entity_df_event_timestamp_range(
+                    entity_df, entity_df_event_timestamp_col, conn, table_name,
+                )
+
                 query_contexts = offline_utils.get_feature_view_query_context(
-                    feature_refs, feature_views, registry, project,
+                    feature_refs,
+                    feature_views,
+                    registry,
+                    project,
+                    entity_df_event_timestamp_range,
                 )
 
                 rendered_query = offline_utils.build_point_in_time_query(
@@ -363,11 +374,11 @@ def _upload_entity_df_and_get_entity_schema(
                 f"CREATE TABLE {table_name} STORED AS PARQUET AS {entity_df}"
             )
         limited_entity_df = HiveRetrievalJob(
-            conn, 
+            conn,
             [
                 "SET hive.resultset.use.unique.column.names=false",
-                f"SELECT * FROM {table_name} LIMIT 1"
-            ]
+                f"SELECT * FROM {table_name} LIMIT 1",
+            ],
         ).to_df()
         return dict(zip(limited_entity_df.columns, limited_entity_df.dtypes))
     else:
@@ -441,6 +452,50 @@ def _upload_entity_df_by_insert(
                 VALUES ({'), ('.join([', '.join(chunk_row) for chunk_row in chunk_data])})
             """
             cursor.execute(entity_chunk_insert_sql)
+
+
+def _get_entity_df_event_timestamp_range(
+    entity_df: Union[pd.DataFrame, str],
+    entity_df_event_timestamp_col: str,
+    conn: HiveConnection,
+    table_name: str,
+) -> Tuple[datetime, datetime]:
+    # TODO haven't got time to test this yet,
+    #      just use fake min and max datetime for now, since they will be detected inside the sql
+    return datetime.now(), datetime.now()
+
+    # if isinstance(entity_df, pd.DataFrame):
+    #     entity_df_event_timestamp = entity_df.loc[
+    #         :, entity_df_event_timestamp_col
+    #     ].infer_objects()
+    #     if pd.api.types.is_string_dtype(entity_df_event_timestamp):
+    #         entity_df_event_timestamp = pd.to_datetime(
+    #             entity_df_event_timestamp, utc=True
+    #         )
+    #     entity_df_event_timestamp_range = (
+    #         entity_df_event_timestamp.min(),
+    #         entity_df_event_timestamp.max(),
+    #     )
+    # elif isinstance(entity_df, str):
+    #     # If the entity_df is a string (SQL query), determine range
+    #     # from table
+    #     with conn.cursor() as cursor:
+    #         cursor.execute(
+    #             f"SELECT MIN({entity_df_event_timestamp_col}) AS min, MAX({entity_df_event_timestamp_col}) AS max FROM {table_name}",
+    #         )
+    #         result = cursor.fetchone()
+    #         assert (
+    #             result is not None
+    #         ), "Fetching the EntityDataframe's timestamp range failed."
+    #         # TODO haven't tested this yet
+    #         entity_df_event_timestamp_range = (
+    #             parser.parse(result[0]),
+    #             parser.parse(result[1]),
+    #         )
+    # else:
+    #     raise InvalidEntityType(type(entity_df))
+    #
+    # return entity_df_event_timestamp_range
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
@@ -517,7 +572,7 @@ WITH {{ featureview.name }}__entity_dataframe AS (
     SELECT
         {{ featureview.event_timestamp_column }} as event_timestamp,
         {{ featureview.created_timestamp_column ~ ' as created_timestamp,' if featureview.created_timestamp_column else '' }}
-        {{ featureview.entity_selections | join(', ')}},
+        {{ featureview.entity_selections | join(', ')}}{% if featureview.entity_selections %},{% else %}{% endif %}
         {% for feature in featureview.features %}
             {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
