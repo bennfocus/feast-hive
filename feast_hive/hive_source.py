@@ -186,13 +186,17 @@ class HiveSource(DataSource):
 
         with HiveConnection(config.offline_store) as conn:
             with conn.cursor() as cursor:
+                database_name = config.offline_store.database if config.offline_store.database else 'default'
                 if self.table is not None:
                     table_splits = self.table.rsplit(".", 1)
-                    database_name = table_splits[0] if len(table_splits) == 2 else None
-                    table_name = (
-                        table_splits[1] if len(table_splits) == 2 else table_splits[0]
-                    )
-
+                    if len(table_splits) == 1:
+                        table_name = table_splits[0]
+                    elif len(table_splits) == 2:
+                        database_name = table_splits[0] if len(table_splits) == 2 else None
+                        table_name = table_splits[1]
+                    else:
+                        raise ValueError(f"Invalid table name {self.table}, "
+                                         f"table name should be [db].[tbl] or just [tbl]")
                     try:
                         return cursor.get_table_schema(table_name, database_name)
                     except:
