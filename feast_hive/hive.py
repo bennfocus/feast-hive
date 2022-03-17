@@ -88,6 +88,12 @@ class HiveOfflineStoreConfig(FeastConfigBaseModel):
     kerberos_service_name: StrictStr = "impala"
     """ Specify particular impalad service principal. """
 
+    use_http_transport: StrictBool = False
+    """ Use http transport mode """
+
+    http_path: StrictStr = ""
+    """ Path of URL endpoint when use http transport mode """
+
     def __init__(self, **data: Any):
         if "hive_conf" not in data:
             data["hive_conf"] = DEFAULT_HIVE_CONF.copy()
