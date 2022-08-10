@@ -162,7 +162,7 @@ class HiveOfflineStore(OfflineStore):
                 "PARTITION BY " + partition_by_join_key_string
             )
         timestamps = [event_timestamp_column]
-        if created_timestamp_column:
+        if created_timestamp_column and created_timestamp_column not in timestamps:
             timestamps.append(created_timestamp_column)
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
         field_string = ", ".join(join_key_columns + feature_name_columns + timestamps)
