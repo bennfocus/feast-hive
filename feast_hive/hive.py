@@ -533,12 +533,16 @@ CREATE TEMPORARY TABLE entity_dataframe AS (
     SELECT *,
         {{entity_df_event_timestamp_col}} AS entity_timestamp
         {% for featureview in featureviews %}
+            {% if featureview.entities %}
             ,CONCAT(
                 {% for entity in featureview.entities %}
                     CAST({{entity}} AS STRING),
                 {% endfor %}
                 CAST({{entity_df_event_timestamp_col}} AS STRING)
             ) AS {{featureview.name}}__entity_row_unique_id
+            {% else %}
+            ,CAST({{entity_df_event_timestamp_col}} AS STRING) AS {{featureview.name}}__entity_row_unique_id
+            {% endif %}
         {% endfor %}
     FROM {{ left_table_query_string }}
 );
@@ -550,11 +554,14 @@ CREATE TEMPORARY TABLE entity_dataframe AS (
 CREATE TEMPORARY TABLE {{ featureview.name }}__base AS
 WITH {{ featureview.name }}__entity_dataframe AS (
     SELECT
-        {{ featureview.entities | join(', ')}},
+        {{ featureview.entities | join(', ')}}{% if featureview.entities %},{% else %}{% endif %}
         entity_timestamp,
         {{featureview.name}}__entity_row_unique_id
     FROM entity_dataframe
-    GROUP BY {{ featureview.entities | join(', ')}}, entity_timestamp, {{featureview.name}}__entity_row_unique_id
+    GROUP BY
+        {{ featureview.entities | join(', ')}}{% if featureview.entities %},{% else %}{% endif %}
+        entity_timestamp,
+        {{featureview.name}}__entity_row_unique_id
 ),
 
 /*
