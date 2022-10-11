@@ -80,6 +80,7 @@ class HiveOptions:
 class HiveSource(DataSource):
     def __init__(
         self,
+        *,
         table: Optional[str] = None,
         query: Optional[str] = None,
         event_timestamp_column: Optional[str] = "",
