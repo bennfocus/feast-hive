@@ -3,6 +3,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from feast import RepoConfig, ValueType
 from feast.data_source import DataSource
+from feast.errors import DataSourceNoNameException
 from feast.errors import DataSourceNotFoundException
 from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast_hive.hive_type_map import hive_to_feast_value_type
@@ -81,6 +82,7 @@ class HiveSource(DataSource):
     def __init__(
         self,
         *,
+        name: Optional[str] = None,
         table: Optional[str] = None,
         query: Optional[str] = None,
         event_timestamp_column: Optional[str] = "",
@@ -92,21 +94,35 @@ class HiveSource(DataSource):
             table is not None or query is not None
         ), '"table" or "query" is required for HiveSource.'
 
+        self._hive_options = HiveOptions(table=table, query=query)
+
+        # If no name, use the table as the default name
+        _name = name
+        if not _name:
+            if table:
+                _name = table
+            else:
+                raise DataSourceNoNameException()
+
         super().__init__(
+            name=_name if _name else "",
             event_timestamp_column,
             created_timestamp_column,
             field_mapping,
             date_partition_column,
         )
 
-        self._hive_options = HiveOptions(table=table, query=query)
+    # Note: Python requires redefining hash in child classes that override __eq__
+    def __hash__(self):
+        return super().__hash__()
 
     def __eq__(self, other):
         if not isinstance(other, HiveSource):
             raise TypeError("Comparisons should only involve HiveSource class objects.")
 
         return (
-            self.hive_options.table == other.hive_options.table
+            self.name == other.name
+            and self.hive_options.table == other.hive_options.table
             and self.hive_options.query == other.hive_options.query
             and self.event_timestamp_column == other.event_timestamp_column
             and self.created_timestamp_column == other.created_timestamp_column
@@ -138,6 +154,7 @@ class HiveSource(DataSource):
 
     def to_proto(self) -> DataSourceProto:
         data_source_proto = DataSourceProto(
+            name=self.name,
             type=DataSourceProto.CUSTOM_SOURCE,
             field_mapping=self.field_mapping,
             custom_options=self.hive_options.to_proto(),
@@ -156,6 +173,7 @@ class HiveSource(DataSource):
         hive_options = HiveOptions.from_proto(data_source.custom_options)
 
         return HiveSource(
+            name=data_source.name,
             field_mapping=dict(data_source.field_mapping),
             table=hive_options.table,
             query=hive_options.query,
