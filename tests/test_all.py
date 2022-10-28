@@ -82,21 +82,21 @@ def prep_hive_fs_and_fv(
     ), TemporaryDirectory() as repo_dir_name, TemporaryDirectory() as data_dir_name:
 
         hive_source = HiveSource(
+            name=table_name,
             table=table_name if source_type == "table" else None,
             query=f"SELECT * FROM {table_name}" if source_type == "query" else None,
-            event_timestamp_column="ts",
+            timestamp_field="ts",
             created_timestamp_column="created_ts",
             date_partition_column="",
-            field_mapping={"ts_1": "ts", "id": "driver_id"},
+            field_mapping={"ts_1": "ts"},
         )
-
-        fv = feast_tests_funcs.correctness_feature_view(hive_source)
         e = Entity(
             name="driver",
             description="id for driver",
-            join_key="driver_id",
+            join_keys=["driver_id"],
             value_type=ValueType.INT32,
         )
+        fv = feast_tests_funcs.correctness_feature_view(hive_source, e)
         config = RepoConfig(
             registry=str(Path(repo_dir_name) / "registry.db"),
             project=f"test_bq_correctness_{str(uuid.uuid4()).replace('-', '')}",
@@ -105,6 +105,7 @@ def prep_hive_fs_and_fv(
                 path=str(Path(data_dir_name) / "online_store.db")
             ),
             offline_store=offline_store,
+            entity_key_serialization_version=2,
         )
         fs = FeatureStore(config=config)
         fs.apply([fv, e])
@@ -159,28 +160,29 @@ def test_hive_source(hive_conn_info):
                 path=os.path.join(temp_dir, "online_store.db"),
             ),
             offline_store=offline_store,
+            entity_key_serialization_version=2,
         )
 
         non_existed_table = f"{table_name}_non_existed"
 
         # Test table doesn't exist
-        hive_source_table = HiveSource(table=non_existed_table)
+        hive_source_table = HiveSource(name=non_existed_table, table=non_existed_table)
         assertpy.assert_that(hive_source_table.validate).raises(
             errors.DataSourceNotFoundException
         ).when_called_with(config)
 
-        hive_source_table = HiveSource(query=f"SELECT * FROM {non_existed_table}")
+        hive_source_table = HiveSource(name=non_existed_table, query=f"SELECT * FROM {non_existed_table}")
         assertpy.assert_that(hive_source_table.validate).raises(
             errors.DataSourceNotFoundException
         ).when_called_with(config)
 
         # Test table
-        hive_source_table = HiveSource(table=table_name)
+        hive_source_table = HiveSource(name=table_name, table=table_name)
         schema1 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema1
 
         # Test query
-        hive_source_table = HiveSource(query=f"SELECT * FROM {table_name} LIMIT 100")
+        hive_source_table = HiveSource(name=table_name, query=f"SELECT * FROM {table_name} LIMIT 100")
         schema2 = hive_source_table.get_table_column_names_and_types(config)
         assert expected_schema == schema2
 
@@ -290,25 +292,28 @@ def test_historical_features_from_hive_sources(
 
     with orders_context, driver_context, customer_context, TemporaryDirectory() as temp_dir:
         driver_source = HiveSource(
+            name=driver_table_name,
             table=driver_table_name,
-            event_timestamp_column="event_timestamp",
+            timestamp_field="event_timestamp",
             created_timestamp_column="created",
         )
+        driver = Entity(name="driver", join_keys=["driver_id"], value_type=ValueType.INT64)
         driver_fv = feast_tests_funcs.create_driver_hourly_stats_feature_view(
-            driver_source
+            driver_source,
+            driver,
         )
 
         customer_source = HiveSource(
+            name=customer_table_name,
             table=customer_table_name,
-            event_timestamp_column="event_timestamp",
+            timestamp_field="event_timestamp",
             created_timestamp_column="created",
         )
+        customer = Entity(name="customer", join_keys=["customer_id"], value_type=ValueType.INT64)
         customer_fv = feast_tests_funcs.create_customer_daily_profile_feature_view(
-            customer_source
+            customer_source,
+            customer,
         )
-
-        driver = Entity(name="driver", join_key="driver_id", value_type=ValueType.INT64)
-        customer = Entity(name="customer_id", value_type=ValueType.INT64)
 
         if provider_type == "local":
             store = FeatureStore(
@@ -320,6 +325,7 @@ def test_historical_features_from_hive_sources(
                         path=os.path.join(temp_dir, "online_store.db"),
                     ),
                     offline_store=offline_store,
+                    entity_key_serialization_version=2,
                 )
             )
         else:
@@ -328,7 +334,7 @@ def test_historical_features_from_hive_sources(
         store.apply([driver, customer, driver_fv, customer_fv])
 
         try:
-            event_timestamp = (
+            timestamp_field = (
                 feast_tests_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
                 if feast_tests_funcs.DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL
                 in orders_df.columns
@@ -340,7 +346,7 @@ def test_historical_features_from_hive_sources(
                 driver_df,
                 driver_fv,
                 orders_df,
-                event_timestamp,
+                timestamp_field,
                 full_feature_names,
             )
 
@@ -371,11 +377,11 @@ def test_historical_features_from_hive_sources(
             )
             assert_frame_equal(
                 expected_df.sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 ).reset_index(drop=True),
                 actual_df_from_sql_entities[expected_df.columns]
                 .sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 )
                 .reset_index(drop=True),
                 check_dtype=False,
@@ -384,11 +390,11 @@ def test_historical_features_from_hive_sources(
             table_from_sql_entities = job_from_sql.to_arrow()
             assert_frame_equal(
                 actual_df_from_sql_entities.sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 ).reset_index(drop=True),
                 table_from_sql_entities.to_pandas()
                 .sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 )
                 .reset_index(drop=True),
             )
@@ -461,11 +467,11 @@ def test_historical_features_from_hive_sources(
             )
             assert_frame_equal(
                 expected_df.sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 ).reset_index(drop=True),
                 actual_df_from_df_entities[expected_df.columns]
                 .sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 )
                 .reset_index(drop=True),
                 check_dtype=False,
@@ -474,11 +480,11 @@ def test_historical_features_from_hive_sources(
             table_from_df_entities = job_from_df.to_arrow()
             assert_frame_equal(
                 actual_df_from_df_entities.sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 ).reset_index(drop=True),
                 table_from_df_entities.to_pandas()
                 .sort_values(
-                    by=[event_timestamp, "order_id", "driver_id", "customer_id"]
+                    by=[timestamp_field, "order_id", "driver_id", "customer_id"]
                 )
                 .reset_index(drop=True),
             )
