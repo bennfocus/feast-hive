@@ -5,8 +5,9 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from feast import FeatureView, Feature, ValueType, FeatureStore
+from feast import FeatureView, FeatureStore, Field, Entity
 from feast.data_source import DataSource
+from feast.types import PrimitiveFeastType
 from pytz import FixedOffset, timezone, utc
 
 DEFAULT_ENTITY_DF_EVENT_TIMESTAMP_COL = "event_timestamp"
@@ -112,7 +113,7 @@ def create_driver_hourly_stats_df(drivers, start_date, end_date) -> pd.DataFrame
             "event_timestamp": [
                 pd.Timestamp(dt, unit="ms", tz="UTC").round("ms")
                 for dt in pd.date_range(
-                    start=start_date, end=end_date, freq="1H", closed="left"
+                    start=start_date, end=end_date, freq="1H", inclusive="left"
                 )
             ]
             # include a fixed timestamp for get_historical_features in the quickstart
@@ -173,7 +174,7 @@ def create_customer_daily_profile_df(customers, start_date, end_date) -> pd.Data
             "event_timestamp": [
                 pd.Timestamp(dt, unit="ms", tz="UTC").round("ms")
                 for dt in pd.date_range(
-                    start=start_date, end=end_date, freq="1D", closed="left"
+                    start=start_date, end=end_date, freq="1D", inclusive="left"
                 )
             ]
         }
@@ -220,32 +221,32 @@ def generate_entities(date, infer_event_timestamp_col, order_count: int = 1000):
     return customer_entities, driver_entities, end_date, orders_df, start_date
 
 
-def create_driver_hourly_stats_feature_view(source):
+def create_driver_hourly_stats_feature_view(source: DataSource, entity: Entity):
     driver_stats_feature_view = FeatureView(
         name="driver_stats",
-        entities=["driver"],
-        features=[
-            Feature(name="conv_rate", dtype=ValueType.FLOAT),
-            Feature(name="acc_rate", dtype=ValueType.FLOAT),
-            Feature(name="avg_daily_trips", dtype=ValueType.INT32),
+        entities=[entity],
+        schema=[
+            Field(name="conv_rate", dtype=PrimitiveFeastType.FLOAT32),
+            Field(name="acc_rate", dtype=PrimitiveFeastType.FLOAT32),
+            Field(name="avg_daily_trips", dtype=PrimitiveFeastType.INT32),
         ],
-        batch_source=source,
+        source=source,
         ttl=timedelta(hours=2),
     )
     return driver_stats_feature_view
 
 
-def create_customer_daily_profile_feature_view(source):
+def create_customer_daily_profile_feature_view(source: DataSource, entity: Entity):
     customer_profile_feature_view = FeatureView(
         name="customer_profile",
-        entities=["customer_id"],
-        features=[
-            Feature(name="current_balance", dtype=ValueType.FLOAT),
-            Feature(name="avg_passenger_count", dtype=ValueType.FLOAT),
-            Feature(name="lifetime_trip_count", dtype=ValueType.INT32),
-            Feature(name="avg_daily_trips", dtype=ValueType.INT32),
+        entities=[entity],
+        schema=[
+            Field(name="current_balance", dtype=PrimitiveFeastType.FLOAT32),
+            Field(name="avg_passenger_count", dtype=PrimitiveFeastType.FLOAT32),
+            Field(name="lifetime_trip_count", dtype=PrimitiveFeastType.INT32),
+            Field(name="avg_daily_trips", dtype=PrimitiveFeastType.INT32),
         ],
-        batch_source=source,
+        source=source,
         ttl=timedelta(days=2),
     )
     return customer_profile_feature_view
@@ -282,35 +283,35 @@ def get_expected_training_df(
     driver_df: pd.DataFrame,
     driver_fv: FeatureView,
     orders_df: pd.DataFrame,
-    event_timestamp: str,
+    timestamp_field: str,
     full_feature_names: bool = False,
 ):
     # Convert all pandas dataframes into records with UTC timestamps
     order_records = convert_timestamp_records_to_utc(
-        orders_df.to_dict("records"), event_timestamp
+        orders_df.to_dict("records"), timestamp_field
     )
     driver_records = convert_timestamp_records_to_utc(
-        driver_df.to_dict("records"), driver_fv.batch_source.event_timestamp_column
+        driver_df.to_dict("records"), driver_fv.batch_source.timestamp_field
     )
     customer_records = convert_timestamp_records_to_utc(
-        customer_df.to_dict("records"), customer_fv.batch_source.event_timestamp_column
+        customer_df.to_dict("records"), customer_fv.batch_source.timestamp_field
     )
 
     # Manually do point-in-time join of orders to drivers and customers records
     for order_record in order_records:
         driver_record = find_asof_record(
             driver_records,
-            ts_key=driver_fv.batch_source.event_timestamp_column,
-            ts_start=order_record[event_timestamp] - driver_fv.ttl,
-            ts_end=order_record[event_timestamp],
+            ts_key=driver_fv.batch_source.timestamp_field,
+            ts_start=order_record[timestamp_field] - driver_fv.ttl,
+            ts_end=order_record[timestamp_field],
             filter_key="driver_id",
             filter_value=order_record["driver_id"],
         )
         customer_record = find_asof_record(
             customer_records,
-            ts_key=customer_fv.batch_source.event_timestamp_column,
-            ts_start=order_record[event_timestamp] - customer_fv.ttl,
-            ts_end=order_record[event_timestamp],
+            ts_key=customer_fv.batch_source.timestamp_field,
+            ts_start=order_record[timestamp_field] - customer_fv.ttl,
+            ts_end=order_record[timestamp_field],
             filter_key="customer_id",
             filter_value=order_record["customer_id"],
         )
@@ -342,8 +343,8 @@ def get_expected_training_df(
 
     # Move "event_timestamp" column to front
     current_cols = expected_df.columns.tolist()
-    current_cols.remove(event_timestamp)
-    expected_df = expected_df[[event_timestamp] + current_cols]
+    current_cols.remove(timestamp_field)
+    expected_df = expected_df[[timestamp_field] + current_cols]
 
     # Cast some columns to expected types, since we lose information when converting pandas DFs into Python objects.
     if full_feature_names:
@@ -371,7 +372,7 @@ def create_dataset() -> pd.DataFrame:
     now = datetime.utcnow()
     ts = pd.Timestamp(now).round("ms")
     data = {
-        "id": [1, 2, 1, 3, 3],
+        "driver_id": [1, 2, 1, 3, 3],
         "value": [0.1, None, 0.3, 4, 5],
         "ts_1": [
             ts - timedelta(hours=4),
@@ -390,13 +391,13 @@ def create_dataset() -> pd.DataFrame:
     return pd.DataFrame.from_dict(data)
 
 
-def correctness_feature_view(data_source: DataSource) -> FeatureView:
+def correctness_feature_view(data_source: DataSource, entity: Entity) -> FeatureView:
     return FeatureView(
         name="test_correctness",
-        entities=["driver"],
-        features=[Feature("value", ValueType.FLOAT)],
+        entities=[entity],
+        schema=[Field(name="value", dtype=PrimitiveFeastType.FLOAT32)],
         ttl=timedelta(days=5),
-        input=data_source,
+        source=data_source,
     )
 
 
@@ -412,7 +413,7 @@ def check_offline_and_online_features(
     # Check online store
     response_dict = fs.get_online_features(
         [f"{fv.name}:value"],
-        [{"driver": driver_id}],
+        [{"driver_id": driver_id}],
         full_feature_names=full_feature_names,
     ).to_dict()
 

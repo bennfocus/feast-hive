@@ -1,11 +1,11 @@
 import contextlib
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, ContextManager, Dict, List, Optional, Tuple, Union
 
+import uuid
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-from dateutil import parser
 from pydantic import StrictBool, StrictInt, StrictStr
 from pytz import utc
 from six import reraise
@@ -15,12 +15,14 @@ from feast.data_source import DataSource
 from feast.errors import InvalidEntityType
 from feast.feature_view import DUMMY_ENTITY_ID, DUMMY_ENTITY_VAL
 from feast.infra.offline_stores import offline_utils
-from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob
+from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob, RetrievalMetadata
 from feast.on_demand_feature_view import OnDemandFeatureView
-from feast.registry import Registry
+from feast.infra.registry.registry import Registry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
+from feast.saved_dataset import SavedDatasetStorage
 from feast_hive.hive_source import HiveSource
 from feast_hive.hive_type_map import hive_to_pa_value_type, pa_to_hive_value_type
+from feast_hive.hive_source import SavedDatasetHiveStorage
 
 try:
     from impala.dbapi import connect as impala_connect
@@ -140,13 +142,47 @@ class HiveConnection:
 
 
 class HiveOfflineStore(OfflineStore):
+
+    @staticmethod
+    def pull_all_from_table_or_query(
+            config: RepoConfig,
+            data_source: DataSource,
+            join_key_columns: List[str],
+            feature_name_columns: List[str],
+            timestamp_field: str,
+            start_date: datetime,
+            end_date: datetime) -> RetrievalJob:
+        assert isinstance(config.offline_store, HiveOfflineStoreConfig)
+        assert isinstance(data_source, HiveSource)
+
+        from_expression = data_source.get_table_query_string()
+
+        field_string = ", ".join(
+            join_key_columns + feature_name_columns + [timestamp_field]
+        )
+
+        start_date = _format_datetime(start_date)
+        end_date = _format_datetime(end_date)
+
+        queries = [
+            "SET hive.resultset.use.unique.column.names=false",
+            f"""
+             SELECT {field_string}
+             FROM {from_expression}
+             WHERE {timestamp_field} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
+             """,
+        ]
+
+        conn = HiveConnection(config.offline_store)
+        return HiveRetrievalJob(conn, queries)
+
     @staticmethod
     def pull_latest_from_table_or_query(
         config: RepoConfig,
         data_source: DataSource,
         join_key_columns: List[str],
         feature_name_columns: List[str],
-        event_timestamp_column: str,
+        timestamp_field: str,
         created_timestamp_column: Optional[str],
         start_date: datetime,
         end_date: datetime,
@@ -161,7 +197,7 @@ class HiveOfflineStore(OfflineStore):
             partition_by_join_key_string = (
                 "PARTITION BY " + partition_by_join_key_string
             )
-        timestamps = [event_timestamp_column]
+        timestamps = [timestamp_field]
         if created_timestamp_column and created_timestamp_column not in timestamps:
             timestamps.append(created_timestamp_column)
         timestamp_desc_string = " DESC, ".join(timestamps) + " DESC"
@@ -180,7 +216,7 @@ class HiveOfflineStore(OfflineStore):
                 SELECT {field_string},
                 ROW_NUMBER() OVER({partition_by_join_key_string} ORDER BY {timestamp_desc_string}) AS feast_row_
                 FROM {from_expression} t1
-                WHERE {event_timestamp_column} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
+                WHERE {timestamp_field} BETWEEN TIMESTAMP('{start_date}') AND TIMESTAMP('{end_date}')
             ) t2
             WHERE feast_row_ = 1
             """,
@@ -200,19 +236,30 @@ class HiveOfflineStore(OfflineStore):
         full_feature_names: bool = False,
     ) -> RetrievalJob:
         assert isinstance(config.offline_store, HiveOfflineStoreConfig)
+        for fv in feature_views:
+            assert isinstance(fv.batch_source, HiveSource)
         conn = HiveConnection(config.offline_store)
+
+        table_name = offline_utils.get_temp_entity_table_name()
+
+        entity_schema = _get_entity_schema(
+            conn,
+            entity_df
+        )
+
+        entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
+            entity_schema
+        )
+
+        entity_df_event_timestamp_range = _get_entity_df_event_timestamp_range(
+            entity_df, entity_df_event_timestamp_col, conn,
+        )
 
         @contextlib.contextmanager
         def query_generator() -> ContextManager[List[str]]:
-            table_name = offline_utils.get_temp_entity_table_name()
-
             try:
-                entity_schema = _upload_entity_df_and_get_entity_schema(
+                _upload_entity_df_and_get_entity_schema(
                     config, conn, table_name, entity_df
-                )
-
-                entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
-                    entity_schema
                 )
 
                 expected_join_keys = offline_utils.get_expected_join_keys(
@@ -221,10 +268,6 @@ class HiveOfflineStore(OfflineStore):
 
                 offline_utils.assert_expected_columns_in_entity_df(
                     entity_schema, expected_join_keys, entity_df_event_timestamp_col
-                )
-
-                entity_df_event_timestamp_range = _get_entity_df_event_timestamp_range(
-                    entity_df, entity_df_event_timestamp_col, conn, table_name,
                 )
 
                 query_contexts = offline_utils.get_feature_view_query_context(
@@ -266,6 +309,12 @@ class HiveOfflineStore(OfflineStore):
             on_demand_feature_views=OnDemandFeatureView.get_requested_odfvs(
                 feature_refs, project, registry
             ),
+            metadata=RetrievalMetadata(
+                features=feature_refs,
+                keys=list(entity_schema.keys() - {entity_df_event_timestamp_col}),
+                min_event_timestamp=entity_df_event_timestamp_range[0],
+                max_event_timestamp=entity_df_event_timestamp_range[1],
+            ),
         )
 
 
@@ -276,6 +325,7 @@ class HiveRetrievalJob(RetrievalJob):
         queries: Union[str, List[str], Callable[[], ContextManager[List[str]]]],
         full_feature_names: bool = False,
         on_demand_feature_views: Optional[List[OnDemandFeatureView]] = None,
+        metadata: Optional[RetrievalMetadata] = None,
     ):
         assert (
             isinstance(queries, str) or isinstance(queries, list) or callable(queries)
@@ -301,6 +351,7 @@ class HiveRetrievalJob(RetrievalJob):
         self._conn = conn
         self._full_feature_names = full_feature_names
         self._on_demand_feature_views = on_demand_feature_views
+        self._metadata = metadata
 
     @property
     def full_feature_names(self) -> bool:
@@ -331,6 +382,43 @@ class HiveRetrievalJob(RetrievalJob):
                 ]
                 return pa.Table.from_batches(pa_batches, schema)
 
+    def to_hive(
+            self,
+            destination_table: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Triggers the execution of a historical feature retrieval query and exports the results to a Hive table.
+        Args:
+            destination_table: the destination table name.
+        Returns:
+            Returns the destination table name.
+        """
+        if not destination_table:
+            today = date.today().strftime("%Y%m%d")
+            rand_id = str(uuid.uuid4())[:7]
+            destination_table = f"historical_{today}_{rand_id}"
+
+        with self._queries_generator() as queries:
+            with self._conn.cursor() as cursor:
+                queries[-1] = f"""
+                CREATE TABLE {destination_table} STORED AS PARQUET AS
+                {queries[-1]}
+                """
+                for query in queries:
+                    cursor.execute(query)
+        return destination_table
+
+    def persist(self, storage: SavedDatasetStorage, allow_overwrite: bool = False):
+        if not isinstance(storage, SavedDatasetHiveStorage):
+            raise ValueError(
+                f"The storage object is not a `SavedDatasetHiveStorage` but is instead a {type(storage)}"
+            )
+        storage.hive_options.table = self.to_hive(destination_table=storage.hive_options.table)
+
+    @property
+    def metadata(self) -> Optional[RetrievalMetadata]:
+        return self._metadata
+
     @staticmethod
     def _convert_hive_batch_to_arrow_batch(
         hive_batch: ImpalaCBatch, schema: pa.Schema
@@ -358,6 +446,26 @@ def _format_datetime(t: datetime):
         t = t.astimezone(tz=utc)
     t = t.strftime("%Y-%m-%d %H:%M:%S.%f")
     return t
+
+
+def _get_entity_schema(
+    conn: HiveConnection, entity_df: Union[pd.DataFrame, str]
+) -> Dict[str, np.dtype]:
+    if isinstance(entity_df, str):
+        entity_df_sample = HiveRetrievalJob(
+            conn,
+            [
+                "SET hive.resultset.use.unique.column.names=false",
+                f"SELECT * FROM ({entity_df}) AS t LIMIT 1",
+            ],
+        ).to_df()
+        entity_schema = dict(zip(entity_df_sample.columns, entity_df_sample.dtypes))
+    elif isinstance(entity_df, pd.DataFrame):
+        entity_schema = dict(zip(entity_df.columns, entity_df.dtypes))
+    else:
+        raise InvalidEntityType(type(entity_df))
+
+    return entity_schema
 
 
 def _upload_entity_df_and_get_entity_schema(
@@ -464,44 +572,37 @@ def _get_entity_df_event_timestamp_range(
     entity_df: Union[pd.DataFrame, str],
     entity_df_event_timestamp_col: str,
     conn: HiveConnection,
-    table_name: str,
 ) -> Tuple[datetime, datetime]:
-    # TODO haven't got time to test this yet,
-    #      just use fake min and max datetime for now, since they will be detected inside the sql
-    return datetime.now(), datetime.now()
+    if isinstance(entity_df, pd.DataFrame):
+        entity_df_event_timestamp = entity_df.loc[
+            :, entity_df_event_timestamp_col
+        ].infer_objects()
+        if pd.api.types.is_string_dtype(entity_df_event_timestamp):
+            entity_df_event_timestamp = pd.to_datetime(
+                entity_df_event_timestamp, utc=True
+            )
+        entity_df_event_timestamp_range = (
+            entity_df_event_timestamp.min().to_pydatetime(),
+            entity_df_event_timestamp.max().to_pydatetime(),
+        )
+    elif isinstance(entity_df, str):
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"SELECT MIN({entity_df_event_timestamp_col}) AS min, MAX({entity_df_event_timestamp_col}) AS max "
+                f"FROM ({entity_df}) AS t",
+            )
+            result = cursor.fetchone()
+            assert (
+                result is not None
+            ), "Fetching the EntityDataframe's timestamp range failed."
+            entity_df_event_timestamp_range = (
+                pd.to_datetime(result[0]).to_pydatetime(),
+                pd.to_datetime(result[1]).to_pydatetime(),
+            )
+    else:
+        raise InvalidEntityType(type(entity_df))
 
-    # if isinstance(entity_df, pd.DataFrame):
-    #     entity_df_event_timestamp = entity_df.loc[
-    #         :, entity_df_event_timestamp_col
-    #     ].infer_objects()
-    #     if pd.api.types.is_string_dtype(entity_df_event_timestamp):
-    #         entity_df_event_timestamp = pd.to_datetime(
-    #             entity_df_event_timestamp, utc=True
-    #         )
-    #     entity_df_event_timestamp_range = (
-    #         entity_df_event_timestamp.min(),
-    #         entity_df_event_timestamp.max(),
-    #     )
-    # elif isinstance(entity_df, str):
-    #     # If the entity_df is a string (SQL query), determine range
-    #     # from table
-    #     with conn.cursor() as cursor:
-    #         cursor.execute(
-    #             f"SELECT MIN({entity_df_event_timestamp_col}) AS min, MAX({entity_df_event_timestamp_col}) AS max FROM {table_name}",
-    #         )
-    #         result = cursor.fetchone()
-    #         assert (
-    #             result is not None
-    #         ), "Fetching the EntityDataframe's timestamp range failed."
-    #         # TODO haven't tested this yet
-    #         entity_df_event_timestamp_range = (
-    #             parser.parse(result[0]),
-    #             parser.parse(result[1]),
-    #         )
-    # else:
-    #     raise InvalidEntityType(type(entity_df))
-    #
-    # return entity_df_event_timestamp_range
+    return entity_df_event_timestamp_range
 
 
 # This query is based on sdk/python/feast/infra/offline_stores/bigquery.py:MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN
@@ -583,11 +684,11 @@ WITH {{ featureview.name }}__entity_dataframe AS (
 
 {{ featureview.name }}__subquery AS (
     SELECT
-        {{ featureview.event_timestamp_column }} as event_timestamp,
+        {{ featureview.timestamp_field }} as event_timestamp,
         {{ featureview.created_timestamp_column ~ ' as created_timestamp,' if featureview.created_timestamp_column else '' }}
         {{ featureview.entity_selections | join(', ')}}{% if featureview.entity_selections %},{% else %}{% endif %}
         {% for feature in featureview.features %}
-            {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
+            {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}{% else %}{{ featureview.field_mapping.get(feature, feature) }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
         {% endfor %}
     FROM {{ featureview.table_subquery }} AS subquery
     INNER JOIN (
@@ -598,9 +699,9 @@ WITH {{ featureview.name }}__entity_dataframe AS (
         FROM entity_dataframe
     ) AS temp
     ON (
-        {{ featureview.event_timestamp_column }} <= max_entity_timestamp_
+        {{ featureview.timestamp_field }} <= max_entity_timestamp_
         {% if featureview.ttl == 0 %}{% else %}
-        AND {{ featureview.event_timestamp_column }} >=  min_entity_timestamp_
+        AND {{ featureview.timestamp_field }} >=  min_entity_timestamp_
         {% endif %}
     )
 )
@@ -710,7 +811,7 @@ LEFT JOIN (
     SELECT
         {{featureview.name}}__entity_row_unique_id
         {% for feature in featureview.features %}
-            ,{% if full_feature_names %}{{ featureview.name }}__{{feature}}{% else %}{{ feature }}{% endif %}
+            ,{% if full_feature_names %}{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}{% else %}{{ featureview.field_mapping.get(feature, feature) }}{% endif %}
         {% endfor %}
     FROM {{ featureview.name }}__cleaned
 ) AS {{ featureview.name }}__joined 
